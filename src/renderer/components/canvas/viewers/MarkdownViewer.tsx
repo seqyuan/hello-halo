@@ -13,10 +13,49 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Copy, Check, Code, Eye, ExternalLink } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import { highlightCodeSync } from '../../../lib/highlight-loader'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
 import { useTranslation } from '../../../i18n'
+
+/**
+ * Resolve relative image paths to halo-file:// protocol URLs
+ * This bypasses cross-origin restrictions in dev mode (http://localhost -> file://)
+ */
+function resolveImageSrc(src: string | undefined, basePath: string): string {
+  if (!src) return ''
+
+  // Keep absolute URLs and data URIs as-is
+  if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
+    return src
+  }
+
+  // No base path available, return original
+  if (!basePath) return src
+
+  // Resolve relative paths to halo-file:// protocol
+  if (src.startsWith('./')) {
+    return `halo-file://${basePath}/${src.slice(2)}`
+  }
+
+  if (src.startsWith('../')) {
+    const parts = basePath.split('/')
+    const srcParts = src.split('/')
+    while (srcParts[0] === '..') {
+      parts.pop()
+      srcParts.shift()
+    }
+    return `halo-file://${parts.join('/')}/${srcParts.join('/')}`
+  }
+
+  if (src.startsWith('/')) {
+    return `halo-file://${src}`
+  }
+
+  // Relative path without prefix
+  return `halo-file://${basePath}/${src}`
+}
 
 interface MarkdownViewerProps {
   tab: CanvasTab
@@ -28,6 +67,9 @@ export function MarkdownViewer({ tab, onScrollChange }: MarkdownViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewMode, setViewMode] = useState<'rendered' | 'source'>('rendered')
   const [copied, setCopied] = useState(false)
+
+  // Get the base directory of the markdown file for resolving relative paths
+  const basePath = tab.path ? tab.path.substring(0, tab.path.lastIndexOf('/')) : ''
 
   // Restore scroll position
   useEffect(() => {
@@ -138,36 +180,42 @@ export function MarkdownViewer({ tab, onScrollChange }: MarkdownViewerProps) {
         className="flex-1 overflow-auto"
       >
         {viewMode === 'rendered' ? (
-          <div className="prose dark:prose-invert prose-sm max-w-none p-6">
+          <div className="prose prose-invert max-w-none p-6 sm:p-8">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeRaw]}
               components={{
+                // Code block container - uses not-prose to escape prose styles
+                // for CopyButton positioning (styles must be defined here, not in config)
+                pre({ children }) {
+                  return (
+                    <div className="relative group not-prose">
+                      <pre className="bg-muted/50 rounded-lg p-4 overflow-x-auto text-sm leading-relaxed">
+                        {children}
+                      </pre>
+                      <PreCopyButton>{children}</PreCopyButton>
+                    </div>
+                  )
+                },
+                // Handle code element - only process code blocks for syntax highlighting
+                // Inline code styling is handled by tailwind.config.cjs (:not(pre) > code)
                 code({ node, inline, className, children, ...props }: any) {
+                  // Inline code - let prose styles handle it
+                  if (inline) {
+                    return <code {...props}>{children}</code>
+                  }
+
+                  // Code block - apply syntax highlighting
                   const match = /language-(\w+)/.exec(className || '')
                   const language = match ? match[1] : ''
                   const code = String(children).replace(/\n$/, '')
-
-                  if (inline) {
-                    return (
-                      <code className="bg-muted px-1.5 py-0.5 rounded text-sm" {...props}>
-                        {children}
-                      </code>
-                    )
-                  }
-
-                  // Highlight code block (uses lazy-loaded hljs)
                   const highlighted = highlightCodeSync(code, language)
 
                   return (
-                    <div className="relative group">
-                      <pre className="bg-muted/50 rounded-lg p-4 overflow-x-auto">
-                        <code
-                          className={`hljs ${language ? `language-${language}` : ''}`}
-                          dangerouslySetInnerHTML={{ __html: highlighted }}
-                        />
-                      </pre>
-                      <CopyButton text={code} />
-                    </div>
+                    <code
+                      className={`hljs ${language ? `language-${language}` : ''}`}
+                      dangerouslySetInnerHTML={{ __html: highlighted }}
+                    />
                   )
                 },
                 // Style tables
@@ -178,26 +226,23 @@ export function MarkdownViewer({ tab, onScrollChange }: MarkdownViewerProps) {
                     </div>
                   )
                 },
-                // Style links
+                // Links - add target="_blank" (styling from tailwind.config.cjs)
                 a({ href, children }) {
                   return (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary hover:underline"
-                    >
+                    <a href={href} target="_blank" rel="noopener noreferrer">
                       {children}
                     </a>
                   )
                 },
-                // Style images
+                // Style images - resolve relative paths using halo-file:// protocol
                 img({ src, alt }) {
                   return (
                     <img
-                      src={src}
+                      src={resolveImageSrc(src, basePath)}
                       alt={alt}
-                      className="max-w-full h-auto rounded-lg"
+                      className="h-auto rounded-lg"
+                      // Don't stretch small images, limit large ones (like GitHub ~880px)
+                      style={{ maxWidth: 'min(100%, 880px)' }}
                     />
                   )
                 }
@@ -240,14 +285,32 @@ function SourceView({ content }: { content: string }) {
 }
 
 /**
- * Copy button for code blocks
+ * Extract text content from React children (for code blocks)
  */
-function CopyButton({ text }: { text: string }) {
+function extractTextFromChildren(children: React.ReactNode): string {
+  if (typeof children === 'string') return children
+  if (Array.isArray(children)) return children.map(extractTextFromChildren).join('')
+  if (children && typeof children === 'object' && 'props' in children) {
+    const props = children.props as { children?: React.ReactNode; dangerouslySetInnerHTML?: { __html: string } }
+    if (props.dangerouslySetInnerHTML) {
+      // Extract text from HTML string
+      return props.dangerouslySetInnerHTML.__html.replace(/<[^>]*>/g, '')
+    }
+    return extractTextFromChildren(props.children)
+  }
+  return ''
+}
+
+/**
+ * Copy button for pre blocks (extracts text from children)
+ */
+function PreCopyButton({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
     try {
+      const text = extractTextFromChildren(children)
       await navigator.clipboard.writeText(text)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
