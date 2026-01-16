@@ -90,16 +90,43 @@ export default function App() {
   // For search result navigation
   const { spaces, haloSpace, setCurrentSpace: setSpaceStoreCurrentSpace } = useSpaceStore()
 
-  // Initialize app on mount
+  // Initialize app on mount - wait for backend extended services to be ready
   useEffect(() => {
-    // Show splash for 2 seconds then initialize
-    const timer = setTimeout(async () => {
+    let initialized = false
+    const startTime = Date.now()
+    console.log('[App] Mounted, waiting for bootstrap:extended-ready...')
+
+    const doInit = async (trigger: 'event' | 'timeout') => {
+      if (initialized) return
+      initialized = true
+
+      const waitTime = Date.now() - startTime
+      console.log(`[App] Starting initialization (trigger: ${trigger}, waited: ${waitTime}ms)`)
+
       await initialize()
       // Initialize onboarding after app config is loaded
       await initializeOnboarding()
-    }, 2000)
+    }
 
-    return () => clearTimeout(timer)
+    // Listen for extended services ready event from main process
+    const unsubscribe = api.onBootstrapExtendedReady((data) => {
+      console.log('[App] Received bootstrap:extended-ready', data)
+      doInit('event')
+    })
+
+    // Fallback timeout - if event not received in 5 seconds, initialize anyway
+    // This prevents the app from being stuck if something goes wrong
+    const fallbackTimeout = setTimeout(() => {
+      if (!initialized) {
+        console.warn('[App] Bootstrap timeout after 10000ms, force initializing...')
+        doInit('timeout')
+      }
+    }, 10000)
+
+    return () => {
+      unsubscribe()
+      clearTimeout(fallbackTimeout)
+    }
   }, [initialize, initializeOnboarding])
 
   // Theme switching

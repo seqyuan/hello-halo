@@ -35,14 +35,14 @@ export function SettingsPage() {
   const { config, setConfig, goBack } = useAppStore()
 
   // Local state for editing
-  const [apiKey, setApiKey] = useState(config?.api.apiKey || '')
-  const [apiUrl, setApiUrl] = useState(config?.api.apiUrl || '')
-  const [provider, setProvider] = useState(config?.api.provider || 'anthropic')
-  const [model, setModel] = useState(config?.api.model || DEFAULT_MODEL)
-  const [theme, setTheme] = useState<ThemeMode>(config?.appearance.theme || 'system')
+  const [apiKey, setApiKey] = useState(config?.api?.apiKey || '')
+  const [apiUrl, setApiUrl] = useState(config?.api?.apiUrl || '')
+  const [provider, setProvider] = useState(config?.api?.provider || 'anthropic')
+  const [model, setModel] = useState(config?.api?.model || DEFAULT_MODEL)
+  const [theme, setTheme] = useState<ThemeMode>(config?.appearance?.theme || 'system')
   // Custom model toggle: enable by default if current model is not in preset list
   const [useCustomModel, setUseCustomModel] = useState(() => {
-    const currentModel = config?.api.model || DEFAULT_MODEL
+    const currentModel = config?.api?.model || DEFAULT_MODEL
     return !AVAILABLE_MODELS.some(m => m.id === currentModel)
   })
 

@@ -950,6 +950,18 @@ export const api = {
     }
     return window.halo.openExternal(url)
   },
+
+  // ===== Bootstrap Lifecycle Events (Electron only) =====
+  // Used to coordinate renderer initialization with main process service registration
+  onBootstrapExtendedReady: (callback: (data: { timestamp: number; duration: number }) => void) => {
+    if (!isElectron()) {
+      // In remote mode, services are always ready (server handles it)
+      // Call callback immediately
+      setTimeout(() => callback({ timestamp: Date.now(), duration: 0 }), 0)
+      return () => {}
+    }
+    return window.halo.onBootstrapExtendedReady(callback)
+  },
 }
 
 // Export type for the API

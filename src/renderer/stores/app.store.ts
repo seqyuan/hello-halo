@@ -165,34 +165,39 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Initialize app
   initialize: async () => {
+    console.log('[Store] initialize() called')
     try {
       set({ isLoading: true, error: null })
 
       // Windows: Check Git Bash availability first
       if (window.platform?.isWindows) {
+        console.log('[Store] Windows detected, checking Git Bash status...')
         const gitBashStatus = await api.getGitBashStatus()
+        console.log('[Store] Git Bash status response:', gitBashStatus)
         if (gitBashStatus.success && gitBashStatus.data) {
           const { found, source, mockMode } = gitBashStatus.data
 
           // Track mock mode for showing warning banner later
           if (mockMode) {
-            console.log('[App] Git Bash in mock mode, will show warning banner')
+            console.log('[Store] Git Bash in mock mode, will show warning banner')
             set({ mockBashMode: true })
           }
 
           // If Git Bash not found and not previously configured, show setup
           if (!found && !mockMode) {
-            console.log('[App] Git Bash not found, showing setup')
+            console.log('[Store] Git Bash not found, showing setup')
             set({ view: 'gitBashSetup', isLoading: false })
             return
           }
 
-          console.log('[App] Git Bash found:', source, mockMode ? '(mock mode)' : '')
+          console.log('[Store] Git Bash found:', source, mockMode ? '(mock mode)' : '')
         }
       }
 
       // Load config from main process
+      console.log('[Store] Loading config...')
       const response = await api.getConfig()
+      console.log('[Store] Config response:', response.success ? 'success' : 'failed')
 
       if (response.success && response.data) {
         const config = response.data as HaloConfig
@@ -202,21 +207,25 @@ export const useAppStore = create<AppState>((set, get) => ({
         // Determine initial view based on config
         if (config.isFirstLaunch || !config.api.apiKey) {
           // Show setup if first launch or no API key
+          console.log('[Store] First launch or no API key, showing setup')
           set({ view: 'setup' })
         } else {
           // Go to home
+          console.log('[Store] Config loaded, showing home')
           set({ view: 'home' })
         }
       } else {
+        console.error('[Store] Failed to load config:', response.error)
         set({ error: response.error || 'Failed to load configuration' })
         set({ view: 'setup' })
       }
     } catch (error) {
-      console.error('Failed to initialize:', error)
+      console.error('[Store] Failed to initialize:', error)
       set({ error: 'Failed to initialize application' })
       set({ view: 'setup' })
     } finally {
       set({ isLoading: false })
+      console.log('[Store] initialize() completed')
     }
   }
 }))

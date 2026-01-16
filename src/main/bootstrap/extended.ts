@@ -41,6 +41,7 @@ import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-
  */
 export function initializeExtendedServices(mainWindow: BrowserWindow): void {
   const start = performance.now()
+  console.log('[Bootstrap] Extended services starting...')
 
   // === EXTENDED SERVICES ===
   // These services are loaded after the window is visible.
@@ -86,6 +87,16 @@ export function initializeExtendedServices(mainWindow: BrowserWindow): void {
 
   const duration = performance.now() - start
   console.log(`[Bootstrap] Extended services registered in ${duration.toFixed(1)}ms`)
+
+  // Notify renderer that extended services are ready
+  // This allows renderer to safely call extended service APIs
+  if (!mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('bootstrap:extended-ready', {
+      timestamp: Date.now(),
+      duration: duration
+    })
+    console.log('[Bootstrap] Sent bootstrap:extended-ready to renderer')
+  }
 }
 
 /**

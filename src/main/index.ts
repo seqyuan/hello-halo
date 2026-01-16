@@ -34,7 +34,8 @@ if (process.platform === 'win32') {
 
 // Single instance lock: Prevent multiple instances of the application
 // Must be called before app.whenReady()
-const gotTheLock = app.requestSingleInstanceLock()
+// Skip in development mode to allow restart without killing process
+const gotTheLock = !app.isPackaged ? true : app.requestSingleInstanceLock()
 
 if (!gotTheLock) {
   // Another instance is already running, exit immediately
@@ -230,6 +231,7 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
+    console.log('[Main] ready-to-show event fired')
     mainWindow?.show()
   })
 

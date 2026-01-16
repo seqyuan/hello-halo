@@ -233,6 +233,9 @@ export interface HaloAPI {
     error?: string
   }) => void) => Promise<{ success: boolean; path?: string; error?: string }>
   openExternal: (url: string) => Promise<void>
+
+  // Bootstrap lifecycle events
+  onBootstrapExtendedReady: (callback: (data: { timestamp: number; duration: number }) => void) => () => void
 }
 
 interface IpcResponse<T = unknown> {
@@ -429,6 +432,9 @@ const api: HaloAPI = {
     }
   },
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+
+  // Bootstrap lifecycle events
+  onBootstrapExtendedReady: (callback) => createEventListener('bootstrap:extended-ready', callback as (data: unknown) => void),
 }
 
 contextBridge.exposeInMainWorld('halo', api)
