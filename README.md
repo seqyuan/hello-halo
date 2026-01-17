@@ -154,7 +154,7 @@ npm run dev
 3. **Watch the magic** — see files appear in the Artifact Rail
 4. **Preview & iterate** — click any file to preview, ask for changes
 
-> **Pro tip:** For best results, use Claude Sonnet 4.5.5 or Opus 4.5.5 models.
+> **Pro tip:** For best results, use Claude Sonnet 4.5 or Opus 4.5 models.
 
 ---
 
