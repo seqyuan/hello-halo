@@ -3,7 +3,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron'
-import { sendMessage, stopGeneration, handleToolApproval, getSessionState, ensureSessionWarm, testMcpConnections } from '../services/agent.service'
+import { sendMessage, stopGeneration, handleToolApproval, getSessionState, ensureSessionWarm, testMcpConnections } from '../services/agent'
 
 let mainWindow: BrowserWindow | null = null
 

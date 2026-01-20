@@ -158,7 +158,7 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
     <OpenFileContext.Provider value={openFile}>
       <div className="flex flex-col h-full">
         {/* Header with count */}
-        <div className="flex-shrink-0 bg-card/95 backdrop-blur-sm px-2 py-1.5 border-b border-border/50 text-[10px] text-muted-foreground uppercase tracking-wider">
+        <div className="flex-shrink-0 bg-card px-2 py-1.5 border-b border-border/50 text-[10px] text-muted-foreground/80 [.light_&]:text-muted-foreground uppercase tracking-wider">
           {t('Files')} ({itemCount})
         </div>
 

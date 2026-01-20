@@ -32,6 +32,10 @@ if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-gpu')
 }
 
+// Anti-fingerprinting: Disable automation detection features in Chromium
+// This prevents websites from detecting the app as an automated browser
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
+
 // Single instance lock: Prevent multiple instances of the application
 // Must be called before app.whenReady()
 // Skip in development mode to allow restart without killing process

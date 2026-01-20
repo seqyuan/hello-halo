@@ -3,11 +3,30 @@
  * Handles automatic updates via GitHub Releases
  */
 
+// Node/Electron imports
+import { app, BrowserWindow, ipcMain } from 'electron'
+
+// Third-party imports
 import electronUpdater from 'electron-updater'
+import { is } from '@electron-toolkit/utils'
+
+// Local imports
+import { setIsQuitting } from './tray.service'
+
+// Type imports
 const { autoUpdater } = electronUpdater
 type UpdateInfo = electronUpdater.UpdateInfo
-import { BrowserWindow, ipcMain } from 'electron'
-import { is } from '@electron-toolkit/utils'
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/** Delay before quitAndInstall to ensure windows close properly (ms) */
+const QUIT_AND_INSTALL_DELAY_MS = 300
+
+// ============================================================================
+// Configuration
+// ============================================================================
 
 // Configure logging
 autoUpdater.logger = console
@@ -131,9 +150,28 @@ export async function checkForUpdates(): Promise<void> {
 
 /**
  * Quit and install update
+ *
+ * Important timing considerations for Windows NSIS:
+ * 1. Set isQuitting flag to bypass minimize-to-tray behavior
+ * 2. Add delay to ensure app fully closes before installer starts
+ * 3. Use isSilent=false to show installer UI, isForceRunAfter=true to restart after install
+ *
+ * @see https://github.com/electron-userland/electron-builder/issues/1368
  */
 export function quitAndInstall(): void {
-  autoUpdater.quitAndInstall(false, true)
+  // Bypass minimize-to-tray behavior during update
+  setIsQuitting(true)
+
+  // Delay to ensure all windows close before installer launches
+  setTimeout(() => {
+    try {
+      // isSilent=false: show installer UI for user feedback
+      // isForceRunAfter=true: restart app after install completes
+      autoUpdater.quitAndInstall(false, true)
+    } catch (error) {
+      console.error('[Updater] quitAndInstall failed:', error)
+    }
+  }, QUIT_AND_INSTALL_DELAY_MS)
 }
 
 /**
@@ -149,7 +187,6 @@ export function registerUpdaterHandlers(): void {
   })
 
   ipcMain.handle('updater:get-version', () => {
-    const { app } = require('electron')
     return app.getVersion()
   })
 }

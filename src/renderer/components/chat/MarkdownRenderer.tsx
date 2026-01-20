@@ -55,6 +55,7 @@ function CodeBlock({
   }
 
   // Code block
+  // Use theme-aware colors: dark mode uses GitHub Dark, light mode uses GitHub Light
   return (
     <div className="group relative my-3 rounded-xl overflow-hidden border border-border/50 bg-card">
       {/* Header with language and copy button */}
@@ -65,7 +66,7 @@ function CodeBlock({
         <button
           onClick={handleCopy}
           className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground/60
-            hover:text-foreground hover:bg-white/5 rounded-md transition-all"
+            hover:text-foreground hover:bg-white/5 [.light_&]:hover:bg-black/5 rounded-md transition-all"
           title={t('Copy code')}
         >
           {copied ? (

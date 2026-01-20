@@ -12,7 +12,7 @@ import {
   getActiveSessions,
   getSessionState as agentGetSessionState,
   testMcpConnections as agentTestMcpConnections
-} from '../services/agent.service'
+} from '../services/agent'
 
 // Image attachment type for multi-modal messages
 interface ImageAttachment {

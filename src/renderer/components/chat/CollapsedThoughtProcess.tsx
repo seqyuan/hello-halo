@@ -133,7 +133,7 @@ function ThoughtItem({ thought }: { thought: Thought }) {
 
 export function CollapsedThoughtProcess({ thoughts }: CollapsedThoughtProcessProps) {
   const { t } = useTranslation()
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(true)
 
   // Get latest todo data (only render one TodoCard at bottom)
   const latestTodos = useMemo(() => {
