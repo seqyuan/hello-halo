@@ -226,7 +226,7 @@ export function MessageItem({ message, previousCost = 0, hideThoughts = false, i
   // Message bubble content
   const bubble = (
     <div
-      className={`rounded-2xl px-4 py-3 overflow-hidden ${
+      className={`rounded-2xl px-4 py-3 ${
         isUser ? 'message-user' : 'message-assistant'
       } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${!isInContainer ? 'max-w-[85%]' : 'w-full'}`}
     >

@@ -60,12 +60,21 @@ export function Header({ left, right, className = '' }: HeaderProps) {
         ${className}
       `.trim().replace(/\s+/g, ' ')}
     >
-      <div className="flex items-center gap-2 sm:gap-3 no-drag min-w-0 overflow-hidden flex-1">
-        {left}
+      {/* Left side: Interactive elements need no-drag to allow clicks */}
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 overflow-hidden">
+        <div className="no-drag flex items-center gap-2 sm:gap-3">
+          {left}
+        </div>
       </div>
 
-      <div className="flex items-center gap-1 sm:gap-2 no-drag flex-shrink-0">
-        {right}
+      {/* Center: Draggable area - grows to fill space */}
+      <div className="flex-1 min-w-[100px]" />
+
+      {/* Right side: Interactive elements need no-drag to allow clicks */}
+      <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+        <div className="no-drag flex items-center gap-1 sm:gap-2">
+          {right}
+        </div>
       </div>
     </header>
   )

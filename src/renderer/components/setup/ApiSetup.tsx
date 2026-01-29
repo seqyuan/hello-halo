@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { useAppStore } from '../../stores/app.store'
 import { api } from '../../api'
 import { Lightbulb, CheckCircle2, XCircle } from '../icons/ToolIcons'
-import { Globe, ChevronDown, ArrowLeft, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { Globe, ChevronDown, ArrowLeft, Eye, EyeOff, Loader2, RefreshCw } from 'lucide-react'
 import { AVAILABLE_MODELS, DEFAULT_MODEL } from '../../types'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 
@@ -42,6 +42,12 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
     return !AVAILABLE_MODELS.some(m => m.id === currentModel)
   })
 
+  // Model fetching state
+  const [fetchedModels, setFetchedModels] = useState<string[]>(
+    (config?.api.availableModels as string[]) || []
+  )
+  const [isFetchingModels, setIsFetchingModels] = useState(false)
+
   // Language selector state
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false)
   const [currentLang, setCurrentLang] = useState<LocaleCode>(getCurrentLanguage())
@@ -56,7 +62,7 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
   }
 
   const handleProviderChange = (next: string) => {
-    setProvider(next)
+    setProvider(next as any)
     setError(null)
 
     if (next === 'anthropic') {
@@ -70,6 +76,75 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
       // OpenAI compatible
       if (!apiUrl || apiUrl.includes('anthropic')) setApiUrl('https://api.openai.com')
       if (!model || model.startsWith('claude-')) setModel('gpt-4o-mini')
+    }
+  }
+
+  // Fetch models from custom API
+  const fetchModels = async () => {
+    if (!apiUrl) {
+      setError(t('Please enter API URL first'))
+      return
+    }
+    if (!apiKey) {
+      setError(t('Please enter API Key first'))
+      return
+    }
+
+    setIsFetchingModels(true)
+    setError(null)
+
+    try {
+      // Construct models endpoint
+      let baseUrl = apiUrl
+      if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1)
+
+      // Remove /chat/completions suffix if present (common mistake)
+      if (baseUrl.endsWith('/chat/completions')) {
+        baseUrl = baseUrl.replace(/\/chat\/completions$/, '')
+      }
+
+      const url = `${baseUrl}/models`
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models (${response.status})`)
+      }
+
+      const data = await response.json()
+
+      // OpenAI compatible format: { data: [{ id: 'model-id', ... }] }
+      if (data.data && Array.isArray(data.data)) {
+        const models = data.data
+          .map((m: any) => m.id)
+          .filter((id: any) => typeof id === 'string')
+          .sort()
+
+        if (models.length === 0) {
+          throw new Error('No models found in response')
+        }
+
+        setFetchedModels(models)
+
+        // If current model is not in list (and we found models), select the first one?
+        // Or just let user decide.
+        // If current model is default generic one, maybe switch to first fetched.
+        if (models.length > 0 && (!model || model === 'gpt-4o-mini' || model === 'deepseek-chat')) {
+          setModel(models[0])
+        }
+      } else {
+        throw new Error('Invalid API response format (expected data array)')
+      }
+    } catch {
+      setError(t('Failed to fetch models. Check URL and Key.'))
+    } finally {
+      setIsFetchingModels(false)
     }
   }
 
@@ -99,12 +174,15 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
         return
       }
 
-      // 2. Validation passed, save config
+      // 2. Validation passed, use normalized URL from backend
+      const normalizedUrl = result.data.normalizedUrl || effectiveApiUrl
+
       const customConfig = {
         provider: provider as 'anthropic' | 'openai',
         apiKey,
-        apiUrl: effectiveApiUrl,
-        model
+        apiUrl: normalizedUrl,
+        model,
+        availableModels: fetchedModels
       }
 
       const newConfig = {
@@ -172,9 +250,8 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
                   <button
                     key={code}
                     onClick={() => handleLanguageChange(code as LocaleCode)}
-                    className={`w-full px-4 py-2 text-left text-sm hover:bg-secondary/80 transition-colors ${
-                      currentLang === code ? 'text-primary font-medium' : 'text-foreground'
-                    }`}
+                    className={`w-full px-4 py-2 text-left text-sm hover:bg-secondary/80 transition-colors ${currentLang === code ? 'text-primary font-medium' : 'text-foreground'
+                      }`}
                   >
                     {name}
                   </button>
@@ -205,7 +282,7 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
           <div className="mb-4 flex items-center justify-between gap-3 p-3 bg-secondary/50 rounded-lg">
             <div className="w-8 h-8 rounded-lg bg-[#da7756]/20 flex items-center justify-center">
               <svg className="w-5 h-5 text-[#da7756]" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-1.529.08-.08 6.206-3.48a.25.25 0 00.125-.216V6.177a.25.25 0 00-.375-.217l-6.206 3.48-.08.08-2.726 1.53-.08.079-4.72 2.647a.25.25 0 00-.125.217v1.746c0 .18.193.294.354.216h.001zm13.937-3.584l-4.72 2.647-.08.08-2.726 1.529-.08.08-6.206 3.48a.25.25 0 00-.125.216v1.746a.25.25 0 00.375.217l6.206-3.48.08-.08 2.726-1.53.08-.079 4.72-2.647a.25.25 0 00.125-.217v-1.746a.25.25 0 00-.375-.216z"/>
+                <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-1.529.08-.08 6.206-3.48a.25.25 0 00.125-.216V6.177a.25.25 0 00-.375-.217l-6.206 3.48-.08.08-2.726 1.53-.08.079-4.72 2.647a.25.25 0 00-.125.217v1.746c0 .18.193.294.354.216h.001zm13.937-3.584l-4.72 2.647-.08.08-2.726 1.529-.08.08-6.206 3.48a.25.25 0 00-.125.216v1.746a.25.25 0 00.375.217l6.206-3.48.08-.08 2.726-1.53.08-.079 4.72-2.647a.25.25 0 00.125-.217v-1.746a.25.25 0 00-.375-.216z" />
               </svg>
             </div>
             <div>
@@ -310,21 +387,59 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
                           setModel(DEFAULT_MODEL)
                         }
                       }}
-                    className="w-3 h-3 rounded border-border"
-                  />
+                      className="w-3 h-3 rounded border-border"
+                    />
                     {t('Custom')}
                   </label>
                 </div>
               </>
             ) : (
               <>
-                <input
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="gpt-4o-mini / deepseek-chat"
-                  className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
-                />
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    {fetchedModels.length > 0 ? (
+                      <select
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                        className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors appearance-none"
+                      >
+                        {/* Ensure current model is an option even if not in fetched list (e.g. manual entry previously) */}
+                        {!fetchedModels.includes(model) && model && (
+                          <option value={model}>{model}</option>
+                        )}
+                        {fetchedModels.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                        placeholder="gpt-4o-mini / deepseek-chat"
+                        className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
+                      />
+                    )}
+                    {/* Chevron for select */}
+                    {fetchedModels.length > 0 && (
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
+                        <ChevronDown className="w-4 h-4" />
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={fetchModels}
+                    disabled={isFetchingModels || !apiKey || !apiUrl}
+                    className="px-3 py-2 bg-secondary hover:bg-secondary/80 text-foreground rounded-lg border border-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={t('Fetch available models')}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isFetchingModels ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {t('Enter OpenAI compatible service model name')}
                 </p>

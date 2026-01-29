@@ -56,6 +56,7 @@ export interface ApiConfig {
   apiKey: string;
   apiUrl: string;
   model: string;
+  availableModels?: string[];
 }
 
 export interface PermissionConfig {
@@ -106,10 +107,14 @@ export interface OAuthSourceConfig {
 
 // Custom API source configuration (same as existing ApiConfig)
 export interface CustomSourceConfig {
+  id?: string;
+  name?: string;
+  type?: 'custom';
   provider: ApiProvider;
   apiKey: string;
   apiUrl: string;
   model: string;
+  availableModels?: string[];
 }
 
 // AI Sources - manages multiple login sources

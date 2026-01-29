@@ -102,7 +102,7 @@ export async function sendMessage(
 
   // For non-Anthropic providers (openai or OAuth), use the OpenAI compat router
   if (credentials.provider !== 'anthropic') {
-    const router = await ensureOpenAICompatRouter({ debug: true })  // [DIAG] Enable debug
+    const router = await ensureOpenAICompatRouter({ debug: false })
     anthropicBaseUrl = router.baseUrl
 
     // Use apiType from credentials (set by provider), fallback to inference
@@ -119,10 +119,6 @@ export async function sendMessage(
     // Pass a fake Claude model to CC for normal request handling
     sdkModel = 'claude-sonnet-4-20250514'
     console.log(`[Agent] ${credentials.provider} provider enabled: routing via ${anthropicBaseUrl}, apiType=${apiType}`)
-    // [DIAG] Print env vars that will be passed to SDK subprocess
-    console.log(`[Agent:DIAG] SDK env: ANTHROPIC_BASE_URL=${anthropicBaseUrl}`)
-    console.log(`[Agent:DIAG] SDK env: credentials.baseUrl=${credentials.baseUrl}`)
-    console.log(`[Agent:DIAG] SDK env: process.env.ANTHROPIC_BASE_URL=${process.env.ANTHROPIC_BASE_URL || '(not set)'}`)
   }
 
   // Get conversation for session resumption
@@ -178,9 +174,7 @@ export async function sendMessage(
         // Disable unnecessary API requests
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
         DISABLE_TELEMETRY: '1',
-        DISABLE_COST_WARNINGS: '1',
-        // [DIAG] Enable SDK debug
-        DEBUG_CLAUDE_AGENT_SDK: '1'
+        DISABLE_COST_WARNINGS: '1'
       },
       extraArgs: {
         'dangerously-skip-permissions': null

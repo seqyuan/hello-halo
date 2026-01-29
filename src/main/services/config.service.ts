@@ -10,6 +10,175 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 // Import analytics config type
 import type { AnalyticsConfig } from './analytics/types'
 import type { AISourcesConfig, CustomSourceConfig } from '../../shared/types'
+import { decryptString } from './secure-storage.service'
+
+// ============================================================================
+// ENCRYPTED DATA MIGRATION
+// ============================================================================
+// v1.2.10 and earlier used Electron's safeStorage to encrypt API keys/tokens.
+// v1.2.12 removed encryption (causes macOS Keychain prompts) but kept decryption
+// for backward compatibility. However, if decryption fails (Keychain unavailable,
+// cross-machine migration, data corruption), decryptString() returns empty string,
+// causing the app to think no API key is configured.
+//
+// This migration runs once at startup (before any service reads config) to:
+// 1. Detect encrypted values (enc: prefix)
+// 2. Attempt decryption
+// 3. Save plaintext on success, clear invalid data on failure
+// 4. Ensure subsequent reads get valid data
+// ============================================================================
+
+const ENCRYPTED_PREFIX = 'enc:'
+
+interface MigrationResult {
+  migrated: boolean
+  fields: string[]
+  failures: string[]
+}
+
+/**
+ * Check if a value is encrypted (has enc: prefix)
+ */
+function isEncryptedValue(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith(ENCRYPTED_PREFIX)
+}
+
+/**
+ * Attempt to decrypt a value and return the result
+ * @returns { success: true, value: decrypted } or { success: false }
+ */
+function tryDecrypt(value: string): { success: true; value: string } | { success: false } {
+  const decrypted = decryptString(value)
+
+  // decryptString returns empty string on failure, or the original value if not encrypted
+  // For encrypted values, success means we got a non-empty, non-enc: prefixed result
+  if (decrypted && !decrypted.startsWith(ENCRYPTED_PREFIX)) {
+    return { success: true, value: decrypted }
+  }
+
+  return { success: false }
+}
+
+/**
+ * Migrate encrypted credentials to plaintext
+ *
+ * This function reads the config file directly (bypassing getConfig() to avoid
+ * triggering decryption in ai-sources/manager.ts) and migrates any encrypted
+ * values to plaintext.
+ *
+ * Called once at app startup, before any IPC handlers are registered.
+ */
+function migrateEncryptedCredentials(): void {
+  const configPath = getConfigPath()
+
+  if (!existsSync(configPath)) {
+    return // No config file, nothing to migrate
+  }
+
+  let parsed: Record<string, any>
+  try {
+    const content = readFileSync(configPath, 'utf-8')
+    parsed = JSON.parse(content)
+  } catch (error) {
+    console.error('[Config Migration] Failed to read config file:', error)
+    return // Don't block startup on migration failure
+  }
+
+  const result: MigrationResult = {
+    migrated: false,
+    fields: [],
+    failures: []
+  }
+
+  // 1. Migrate legacy api.apiKey (if exists and encrypted)
+  if (parsed.api && isEncryptedValue(parsed.api.apiKey)) {
+    const decryptResult = tryDecrypt(parsed.api.apiKey)
+    if (decryptResult.success) {
+      parsed.api.apiKey = decryptResult.value
+      result.migrated = true
+      result.fields.push('api.apiKey')
+    } else {
+      parsed.api.apiKey = ''
+      result.migrated = true
+      result.failures.push('api.apiKey')
+    }
+  }
+
+  // 2. Migrate aiSources.custom.apiKey
+  if (parsed.aiSources?.custom && isEncryptedValue(parsed.aiSources.custom.apiKey)) {
+    const decryptResult = tryDecrypt(parsed.aiSources.custom.apiKey)
+    if (decryptResult.success) {
+      parsed.aiSources.custom.apiKey = decryptResult.value
+      result.migrated = true
+      result.fields.push('aiSources.custom.apiKey')
+    } else {
+      parsed.aiSources.custom.apiKey = ''
+      result.migrated = true
+      result.failures.push('aiSources.custom.apiKey')
+    }
+  }
+
+  // 3. Migrate OAuth provider tokens (accessToken, refreshToken)
+  // OAuth providers are stored as aiSources[providerName] where providerName != 'current' and != 'custom'
+  if (parsed.aiSources && typeof parsed.aiSources === 'object') {
+    for (const [key, value] of Object.entries(parsed.aiSources)) {
+      // Skip non-provider keys
+      if (key === 'current' || key === 'custom' || !value || typeof value !== 'object') {
+        continue
+      }
+
+      const provider = value as Record<string, any>
+
+      // Migrate accessToken
+      if (isEncryptedValue(provider.accessToken)) {
+        const decryptResult = tryDecrypt(provider.accessToken)
+        if (decryptResult.success) {
+          provider.accessToken = decryptResult.value
+          result.migrated = true
+          result.fields.push(`aiSources.${key}.accessToken`)
+        } else {
+          provider.accessToken = ''
+          result.migrated = true
+          result.failures.push(`aiSources.${key}.accessToken`)
+        }
+      }
+
+      // Migrate refreshToken
+      if (isEncryptedValue(provider.refreshToken)) {
+        const decryptResult = tryDecrypt(provider.refreshToken)
+        if (decryptResult.success) {
+          provider.refreshToken = decryptResult.value
+          result.migrated = true
+          result.fields.push(`aiSources.${key}.refreshToken`)
+        } else {
+          provider.refreshToken = ''
+          result.migrated = true
+          result.failures.push(`aiSources.${key}.refreshToken`)
+        }
+      }
+    }
+  }
+
+  // Save migrated config if any changes were made
+  if (result.migrated) {
+    try {
+      writeFileSync(configPath, JSON.stringify(parsed, null, 2))
+
+      if (result.fields.length > 0) {
+        console.log(`[Config Migration] Successfully migrated: ${result.fields.join(', ')}`)
+      }
+      if (result.failures.length > 0) {
+        console.warn(
+          `[Config Migration] Failed to decrypt (cleared): ${result.failures.join(', ')}. ` +
+            'User will need to re-enter these credentials.'
+        )
+      }
+    } catch (error) {
+      console.error('[Config Migration] Failed to save migrated config:', error)
+      // Don't throw - let the app continue, user can re-enter credentials
+    }
+  }
+}
 
 // ============================================================================
 // API Config Change Notification (Callback Pattern)
@@ -181,36 +350,29 @@ const DEFAULT_CONFIG: HaloConfig = {
 
 function normalizeAiSources(parsed: Record<string, any>): AISourcesConfig {
   const raw = parsed?.aiSources
-  const aiSources: AISourcesConfig = {
-    ...(raw && typeof raw === 'object' ? raw : {})
+
+  // If aiSources already exists, use it directly (no auto-rebuild from legacy api)
+  if (raw && typeof raw === 'object') {
+    const aiSources: AISourcesConfig = { ...raw }
+    if (!aiSources.current) {
+      aiSources.current = 'custom'
+    }
+    return aiSources
   }
 
-  if (!aiSources.current) {
-    aiSources.current = 'custom'
-  }
-
+  // First-time migration only: create aiSources from legacy api config
+  const aiSources: AISourcesConfig = { current: 'custom' }
   const legacyApi = parsed?.api
-  const hasLegacyApi =
-    typeof legacyApi?.apiKey === 'string' && legacyApi.apiKey.length > 0
+  const hasLegacyApi = typeof legacyApi?.apiKey === 'string' && legacyApi.apiKey.length > 0
 
-  if (!aiSources.custom && hasLegacyApi) {
+  if (hasLegacyApi) {
     const provider = legacyApi?.provider === 'openai' ? 'openai' : 'anthropic'
     aiSources.custom = {
       provider,
-      apiKey: legacyApi?.apiKey || '',
+      apiKey: legacyApi.apiKey,
       apiUrl: legacyApi?.apiUrl || (provider === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'),
       model: legacyApi?.model || DEFAULT_MODEL
     } as CustomSourceConfig
-  }
-
-  if (aiSources.custom) {
-    const provider = aiSources.custom.provider === 'openai' ? 'openai' : 'anthropic'
-    aiSources.custom = {
-      provider,
-      apiKey: aiSources.custom.apiKey || '',
-      apiUrl: aiSources.custom.apiUrl || (provider === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'),
-      model: aiSources.custom.model || DEFAULT_MODEL
-    }
   }
 
   return aiSources
@@ -269,6 +431,11 @@ export async function initializeApp(): Promise<void> {
   if (!existsSync(configPath)) {
     writeFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2))
   }
+
+  // Migrate encrypted credentials to plaintext (v1.2.10 -> v1.2.12+)
+  // This must run before any service reads the config to ensure decryption
+  // happens at the file level, not at read time where failures cause issues.
+  migrateEncryptedCredentials()
 }
 
 // Get configuration
@@ -371,103 +538,6 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   }
 
   return newConfig
-}
-
-// Validate API connection
-export async function validateApiConnection(
-  apiKey: string,
-  apiUrl: string,
-  provider: string
-): Promise<{ valid: boolean; message?: string; model?: string }> {
-  try {
-    const trimSlash = (s: string) => s.replace(/\/+$/, '')
-    const normalizeOpenAIV1Base = (input: string) => {
-      // Accept:
-      // - https://host
-      // - https://host/v1
-      // - https://host/v1/chat/completions
-      // - https://host/chat/completions
-      let base = trimSlash(input)
-      // If user pasted full chat/completions endpoint, strip it
-      if (base.endsWith('/chat/completions')) {
-        base = base.slice(0, -'/chat/completions'.length)
-        base = trimSlash(base)
-      }
-      // If already contains /v1 anywhere, normalize to ".../v1"
-      const v1Idx = base.indexOf('/v1')
-      if (v1Idx >= 0) {
-        base = base.slice(0, v1Idx + 3) // include "/v1"
-        base = trimSlash(base)
-        return base
-      }
-      return `${base}/v1`
-    }
-
-    // OpenAI compatible validation: GET /v1/models (does not depend on user-selected model)
-    if (provider === 'openai') {
-      const baseV1 = normalizeOpenAIV1Base(apiUrl)
-      const modelsUrl = `${baseV1}/models`
-
-      const response = await fetch(modelsUrl, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${apiKey}`
-        }
-      })
-
-      if (response.ok) {
-        const data: any = await response.json().catch(() => ({}))
-        const modelId =
-          data?.data?.[0]?.id ||
-          data?.model ||
-          undefined
-        return { valid: true, model: modelId }
-      }
-
-      const errorText = await response.text().catch(() => '')
-      return {
-        valid: false,
-        message: errorText || `HTTP ${response.status}`
-      }
-    }
-
-    // Anthropic compatible validation: POST /v1/messages
-    const base = trimSlash(apiUrl)
-    const messagesUrl = `${base}/v1/messages`
-    const response = await fetch(messagesUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: DEFAULT_MODEL,
-        max_tokens: 10,
-        messages: [{ role: 'user', content: 'Hi' }]
-      })
-    })
-
-    if (response.ok) {
-      const data = await response.json()
-      return {
-        valid: true,
-        model: data.model || DEFAULT_MODEL
-      }
-    } else {
-      const error = await response.json().catch(() => ({}))
-      return {
-        valid: false,
-        message: error.error?.message || `HTTP ${response.status}`
-      }
-    }
-  } catch (error: unknown) {
-    const err = error as Error
-    return {
-      valid: false,
-      message: err.message || 'Connection failed'
-    }
-  }
 }
 
 /**

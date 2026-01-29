@@ -122,9 +122,6 @@ export async function handleMessagesRequest(
   res: ExpressResponse,
   options: RequestHandlerOptions = {}
 ): Promise<void> {
-  // [DIAG] Entry point log - always print
-  console.log(`[RequestHandler:DIAG] handleMessagesRequest called, backendUrl=${config.url}`)
-
   const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options
   const { url: backendUrl, key: apiKey, model, headers: customHeaders, apiType: configApiType } = config
 
@@ -166,11 +163,6 @@ export async function handleMessagesRequest(
       const toolCount = (openaiRequest as any).tools?.length ?? 0
       console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
       console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
-
-      // Debug: Log request body for content audit troubleshooting
-      if (backendUrl.includes('tencent')) {
-        console.log(`[RequestHandler:Tencent] Request messages:`, JSON.stringify((openaiRequest as any).messages, null, 2))
-      }
 
       // Apply Tencent content filter if needed
       const filteredRequest = backendUrl.includes('tencent')

@@ -199,7 +199,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   if (!content) return null
 
   return (
-    <div className={`markdown-content ${className}`}>
+    <div className={`markdown-content overflow-x-auto ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={rehypeHighlightOptions}

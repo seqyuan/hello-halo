@@ -142,7 +142,9 @@ body {
   }
 }
 
-/* Desktop: Use relative positioning to preserve Electron drag functionality */
+/* Desktop: No positioning to preserve Electron drag functionality
+ * CRITICAL: position: fixed/relative/absolute on root elements breaks -webkit-app-region: drag
+ * Keep html/body/root with default static positioning for proper drag behavior */
 @media (min-width: 641px) {
   html, body {
     width: 100%;
@@ -151,9 +153,9 @@ body {
   }
 
   #root {
-    position: relative;
+    /* No position property - use default static positioning */
     width: 100%;
-    height: 100vh;
+    height: 100%;
     overflow: hidden;
   }
 }
