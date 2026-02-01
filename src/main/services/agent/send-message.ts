@@ -9,7 +9,7 @@
  * - Error handling and recovery
  */
 
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { getConfig } from '../config.service'
 import { getConversation, saveSessionId, addMessage, updateLastMessage } from '../conversation.service'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
@@ -31,11 +31,15 @@ import {
   getWorkingDir,
   getApiCredentials,
   getEnabledMcpServers,
-  buildSystemPromptAppend,
   inferOpenAIWireApi,
   sendToRenderer,
   setMainWindow
 } from './helpers'
+import {
+  buildSystemPrompt,
+  buildSystemPromptWithAIBrowser,
+  DEFAULT_ALLOWED_TOOLS
+} from './system-prompt'
 import {
   getOrCreateV2Session,
   closeV2Session,
@@ -53,6 +57,8 @@ import {
   extractSingleUsage,
   extractResultUsage
 } from './message-utils'
+import { onAgentError, runPpidScanAndCleanup } from '../health'
+import path from 'path'
 
 // ============================================
 // Send Message
@@ -114,7 +120,9 @@ export async function sendMessage(
       key: credentials.apiKey,
       model: credentials.model,
       headers: credentials.customHeaders,
-      apiType
+      apiType,
+      forceStream: credentials.forceStream,
+      filterContent: credentials.filterContent
     })
     // Pass a fake Claude model to CC for normal request handling
     sdkModel = 'claude-sonnet-4-20250514'
@@ -163,12 +171,20 @@ export async function sendMessage(
       cwd: workDir,
       abortController: abortController,
       env: {
+        // Inherit user env: PATH (git, node, python), HOME (config), HTTP_PROXY, LANG, SSH_AUTH_SOCK
         ...process.env,
+
+        // Electron-specific: Run as Node.js process without GUI
         ELECTRON_RUN_AS_NODE: 1,
         ELECTRON_NO_ATTACH_CONSOLE: 1,
+
+        // API credentials for Claude Code
         ANTHROPIC_API_KEY: anthropicApiKey,
         ANTHROPIC_BASE_URL: anthropicBaseUrl,
-        // Ensure localhost bypasses proxy
+
+        // Use Halo's own config directory to avoid conflicts with CC's ~/.claude
+        CLAUDE_CONFIG_DIR: path.join(app.getPath('userData'), 'claude-config'),
+        // Ensure localhost bypasses proxy (for OpenAI compat router)
         NO_PROXY: 'localhost,127.0.0.1',
         no_proxy: 'localhost,127.0.0.1',
         // Disable unnecessary API requests
@@ -183,16 +199,16 @@ export async function sendMessage(
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data  // Accumulate for error reporting
       },
-      systemPrompt: {
-        type: 'preset' as const,
-        preset: 'claude_code' as const,
-        // Append AI Browser system prompt if enabled
-        // Pass actual model name so AI knows what model it's running on
-        append: buildSystemPromptAppend(workDir, credentials.model) + (aiBrowserEnabled ? AI_BROWSER_SYSTEM_PROMPT : '')
-      },
+      // Use Halo's custom system prompt instead of SDK's 'claude_code' preset
+      systemPrompt: aiBrowserEnabled
+        ? buildSystemPromptWithAIBrowser(
+            { workDir, modelInfo: credentials.model },
+            AI_BROWSER_SYSTEM_PROMPT
+          )
+        : buildSystemPrompt({ workDir, modelInfo: credentials.model }),
       maxTurns: 50,
-      allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'Skill'],
-      settingSources: ['user', 'project'],  // Enable Skills loading from ~/.claude/skills/ and <workspace>/.claude/skills/
+      allowedTools: [...DEFAULT_ALLOWED_TOOLS],
+      settingSources: ['user', 'project'],  // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
       permissionMode: 'acceptEdits' as const,
       canUseTool: createCanUseTool(workDir, spaceId, conversationId),
       includePartialMessages: true,  // Requires SDK patch: enable token-level streaming (stream_event)
@@ -238,7 +254,8 @@ export async function sendMessage(
 
     // Get or create persistent V2 session for this conversation
     // Pass config for rebuild detection when aiBrowserEnabled changes
-    const v2Session = await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId, sessionConfig)
+    // Pass workDir for session migration support (from old ~/.claude to new config dir)
+    const v2Session = await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId, sessionConfig, workDir)
 
     // Dynamic runtime parameter adjustment (via SDK patch)
     // These can be changed without rebuilding the session
@@ -329,6 +346,14 @@ export async function sendMessage(
       error: errorMessage
     })
 
+    // Emit health event for monitoring
+    onAgentError(conversationId, errorMessage)
+
+    // Run PPID scan to clean up dead processes (async, don't wait)
+    runPpidScanAndCleanup().catch(err => {
+      console.error('[Agent] PPID scan after error failed:', err)
+    })
+
     // Close V2 session on error (it may be in a bad state)
     closeV2Session(conversationId)
   } finally {
@@ -417,6 +442,17 @@ async function processMessageStream(
 
   // Stream messages from V2 session
   for await (const sdkMessage of v2Session.stream()) {
+    // ⚠️ DEBUG: Log ALL SDK messages to trace 429 error propagation
+    console.log(`[Agent][${conversationId}] 🔵 SDK message:`, JSON.stringify({
+      type: sdkMessage.type,
+      error: (sdkMessage as any).error,
+      subtype: (sdkMessage as any).subtype,
+      is_error: (sdkMessage as any).is_error,
+      // Truncate large fields
+      message: (sdkMessage as any).message ? '[message object]' : undefined,
+      result: (sdkMessage as any).result?.slice?.(0, 100) ?? (sdkMessage as any).result
+    }))
+
     // Handle abort - check this session's controller
     if (abortController.signal.aborted) {
       console.log(`[Agent][${conversationId}] Aborted`)
@@ -434,12 +470,12 @@ async function processMessageStream(
       if (event.type === 'message_start') {
         console.log(`[Agent][${conversationId}] 🔴 +${elapsed}ms message_start FULL:`, JSON.stringify(event))
       } else {
-        console.log(`[Agent][${conversationId}] 🔴 +${elapsed}ms stream_event:`, JSON.stringify({
-          type: event.type,
-          index: event.index,
-          content_block: event.content_block,
-          delta: event.delta
-        }))
+        // console.log(`[Agent][${conversationId}] 🔴 +${elapsed}ms stream_event:`, JSON.stringify({
+        //   type: event.type,
+        //   index: event.index,
+        //   content_block: event.content_block,
+        //   delta: event.delta
+        // }))
       }
 
       // Text block started
@@ -671,16 +707,8 @@ async function processMessageStream(
 
     // DEBUG: Log all SDK messages with timestamp
     const elapsed = Date.now() - t1
-    console.log(`[Agent][${conversationId}] 🔵 +${elapsed}ms ${sdkMessage.type}:`,
-      sdkMessage.type === 'assistant'
-        ? JSON.stringify(
-            Array.isArray((sdkMessage as any).message?.content)
-              ? (sdkMessage as any).message.content.map((b: any) => ({ type: b.type, id: b.id, name: b.name, textLen: b.text?.length, thinkingLen: b.thinking?.length }))
-              : (sdkMessage as any).message?.content
-          )
-        : sdkMessage.type === 'user'
-          ? `tool_result or input`
-          : ''
+    console.log(`[Agent] SDK messages [${conversationId}] 🔵 +${elapsed}ms ${sdkMessage.type}:`,
+      JSON.stringify(sdkMessage, null, 2)
     )
 
     // Extract single API call usage from assistant message (represents current context size)
@@ -772,6 +800,15 @@ async function processMessageStream(
             input: thought.toolInput || {}
           }
           sendToRenderer('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
+        } else if (thought.type === 'error') {
+          // SDK reported an error (rate_limit, authentication_failed, etc.)
+          // Send error to frontend - user should see the actual error from provider
+          console.log(`[Agent][${conversationId}] Error thought received: ${thought.content}`)
+          sendToRenderer('agent:error', spaceId, conversationId, {
+            type: 'error',
+            error: thought.content,
+            errorCode: thought.errorCode  // Preserve error code for debugging
+          })
         } else if (thought.type === 'result') {
           // Final result - use the last text block as the final reply
           const finalContent = lastTextContent || thought.content
@@ -835,6 +872,24 @@ async function processMessageStream(
         capturedSessionId = sessionIdFromMsg as string
       }
 
+      // 🔑 Check for error_during_execution - this is how CLI reports API errors (429, etc.)
+      const subtype = (sdkMessage as any).subtype
+      if (subtype === 'error_during_execution') {
+        console.log(`[Agent][${conversationId}] ⚠️ SDK result with error_during_execution detected`)
+        // Create error thought to show in UI
+        const errorThought: Thought = {
+          id: `thought-error-${Date.now()}`,
+          type: 'error',
+          content: 'API request failed (rate limit or server error). Please try again later.',
+          timestamp: new Date().toISOString()
+        }
+        sessionState.thoughts.push(errorThought)
+        sendToRenderer('agent:thought', spaceId, conversationId, {
+          type: 'thought',
+          thought: errorThought
+        })
+      }
+
       // Extract token usage from result message
       tokenUsage = extractResultUsage(msg, lastSingleUsage)
       if (tokenUsage) {
@@ -866,8 +921,6 @@ async function processMessageStream(
     })
   } else {
     console.log(`[Agent][${conversationId}] WARNING: No text content after SDK query completed`)
-    // CRITICAL: Still send complete event to unblock frontend
-    // This can happen if content_block_stop is missing from SDK response
 
     // Fallback: Try to use currentStreamingText if available (content_block_stop was missed)
     const fallbackContent = currentStreamingText || ''
@@ -878,12 +931,29 @@ async function processMessageStream(
         thoughts: sessionState.thoughts.length > 0 ? [...sessionState.thoughts] : undefined,
         tokenUsage: tokenUsage || undefined
       })
+      sendToRenderer('agent:complete', spaceId, conversationId, {
+        type: 'complete',
+        duration: 0,
+        tokenUsage
+      })
+    } else {
+      // No content at all - this is an error condition
+      // Check if we already sent an error thought (SDK error was captured)
+      const hasErrorThought = sessionState.thoughts.some(t => t.type === 'error')
+      if (!hasErrorThought) {
+        // No error was captured - send generic error
+        console.log(`[Agent][${conversationId}] Empty response with no error - sending error event`)
+        sendToRenderer('agent:error', spaceId, conversationId, {
+          type: 'error',
+          error: 'Empty response from provider'
+        })
+      }
+      // Always send complete to unblock frontend
+      sendToRenderer('agent:complete', spaceId, conversationId, {
+        type: 'complete',
+        duration: 0,
+        tokenUsage
+      })
     }
-
-    sendToRenderer('agent:complete', spaceId, conversationId, {
-      type: 'complete',
-      duration: 0,
-      tokenUsage  // Include token usage data
-    })
   }
 }

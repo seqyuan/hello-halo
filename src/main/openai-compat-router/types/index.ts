@@ -7,6 +7,8 @@
  * - OpenAI Responses API
  */
 
+import type { BackendRequestConfig } from '../../../shared/types/ai-sources'
+
 // Re-export all types
 export * from './anthropic'
 export * from './openai-chat'
@@ -24,17 +26,9 @@ export type OpenAIWireApiType = 'chat_completions' | 'responses'
 
 /**
  * Backend configuration for routing
- * URL must be complete endpoint (ending with /chat/completions or /responses)
+ * Reuses BackendRequestConfig from shared types to ensure consistency
  */
-export interface BackendConfig {
-  url: string
-  key: string
-  model?: string
-  /** Custom headers to send with requests (used by OAuth providers) */
-  headers?: Record<string, string>
-  /** API type override: 'chat_completions' or 'responses' */
-  apiType?: 'chat_completions' | 'responses'
-}
+export type BackendConfig = BackendRequestConfig
 
 /**
  * Router server info

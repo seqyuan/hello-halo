@@ -33,20 +33,29 @@ interface ThoughtProcessProps {
   isThinking: boolean
 }
 
+// i18n static keys for extraction (DO NOT REMOVE)
+// prettier-ignore
+void function _i18nActionKeys(t: (k: string) => string) {
+  t('Generating {{tool}}...'); t('Reading {{file}}...'); t('Writing {{file}}...');
+  t('Editing {{file}}...'); t('Searching {{pattern}}...'); t('Matching {{pattern}}...');
+  t('Executing {{command}}...'); t('Fetching {{url}}...'); t('Searching {{query}}...');
+  t('Updating tasks...'); t('Executing {{task}}...'); t('Waiting for user response...');
+  t('Processing...'); t('Thinking...');
+}
+
 // Get human-friendly action summary for collapsed header (isThinking=true only)
 // Shows what the agent is currently doing with key details (filename, command, etc.)
-// Returns { key: translationKey, params: interpolation params }
-function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Record<string, unknown> } {
+function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Record<string, string> } {
   // Search from end to find the most recent action
   for (let i = thoughts.length - 1; i >= 0; i--) {
-    const t = thoughts[i]
-    if (t.type === 'tool_use' && t.toolName) {
+    const th = thoughts[i]
+    if (th.type === 'tool_use' && th.toolName) {
       // If tool is still streaming (not ready), show generating
-      if (t.isStreaming || !t.isReady) {
-        return { key: 'Generating {{tool}}...', params: { tool: t.toolName } }
+      if (th.isStreaming || !th.isReady) {
+        return { key: 'Generating {{tool}}...', params: { tool: th.toolName } }
       }
-      const input = t.toolInput
-      switch (t.toolName) {
+      const input = th.toolInput
+      switch (th.toolName) {
         case 'Read': return { key: 'Reading {{file}}...', params: { file: extractFileName(input?.file_path) } }
         case 'Write': return { key: 'Writing {{file}}...', params: { file: extractFileName(input?.file_path) } }
         case 'Edit': return { key: 'Editing {{file}}...', params: { file: extractFileName(input?.file_path) } }
@@ -63,7 +72,7 @@ function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Reco
       }
     }
     // If most recent is thinking, show thinking status
-    if (t.type === 'thinking') {
+    if (th.type === 'thinking') {
       return { key: 'Thinking...' }
     }
   }
@@ -219,7 +228,10 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
           <span className={`text-xs font-medium ${thought.toolResult?.isError ? 'text-destructive' : color}`}>
-            {t(getThoughtLabelKey(thought.type))}
+            {(() => {
+              const label = getThoughtLabelKey(thought.type)
+              return label === 'AI' ? label : t(label)
+            })()}
             {thought.toolName && ` - ${thought.toolName}`}
           </span>
           {toolStatus && (
@@ -475,7 +487,7 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
             {/* TodoCard - fixed at bottom, only one instance */}
             {latestTodos && latestTodos.length > 0 && (
               <div className={`px-4 ${hasDisplayContent ? 'pt-2' : 'pt-3'} pb-3`}>
-                <TodoCard todos={latestTodos} />
+                <TodoCard todos={latestTodos} isAgentActive={isThinking} />
               </div>
             )}
 

@@ -211,7 +211,9 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     model: backendConfig.model || 'claude-opus-4-5-20251101',
     provider,
     customHeaders: backendConfig.headers,
-    apiType: backendConfig.apiType
+    apiType: backendConfig.apiType,
+    forceStream: backendConfig.forceStream,
+    filterContent: backendConfig.filterContent
   }
 }
 
@@ -260,24 +262,6 @@ export function getEnabledMcpServers(mcpServers: Record<string, any>): Record<st
 }
 
 // ============================================
-// System Prompt
-// ============================================
-
-/**
- * Build system prompt append - minimal context, preserve Claude Code's native behavior
- * @param workDir - Current working directory
- * @param modelInfo - The actual model being used (user-configured, may differ from SDK's internal model)
- */
-export function buildSystemPromptAppend(workDir: string, modelInfo?: string): string {
-  const modelLine = modelInfo ? `You are powered by ${modelInfo}.` : ''
-  return `
-You are Halo, an AI assistant that helps users accomplish real work.
-${modelLine}
-All created files will be saved in the user's workspace. Current workspace: ${workDir}.
-`
-}
-
-// ============================================
 // Renderer Communication
 // ============================================
 
@@ -314,7 +298,7 @@ export function sendToRenderer(
   // 1. Send to Electron renderer via IPC
   if (currentMainWindow && !currentMainWindow.isDestroyed()) {
     currentMainWindow.webContents.send(channel, eventData)
-    console.log(`[Agent] Sent to renderer: ${channel}`, JSON.stringify(eventData).substring(0, 200))
+    // console.log(`[Agent] Sent to renderer: ${channel}`, JSON.stringify(eventData).substring(0, 200))
   }
 
   // 2. Broadcast to remote WebSocket clients

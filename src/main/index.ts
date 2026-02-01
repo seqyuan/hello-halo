@@ -113,6 +113,7 @@ import { manualCheckForUpdates } from './services/updater.service'
 import { initAnalytics } from './services/analytics'
 import { registerProtocols } from './services/protocol.service'
 import { setMainWindow } from './services/window.service'
+import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive } from './services/health'
 
 let mainWindow: BrowserWindow | null = null
 let isAppQuitting = false
@@ -314,10 +315,12 @@ function createWindow(): void {
   })
 
   mainWindow.on('unresponsive', () => {
+    onRendererUnresponsive()
     recoverRenderer('unresponsive')
   })
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    onRendererCrash({ reason: details.reason })
     recoverRenderer(`render-process-gone:${details.reason}`)
   })
 
@@ -362,6 +365,10 @@ app.whenReady().then(async () => {
 
   // Initialize app data directories
   await initializeApp()
+
+  // Initialize health system instance ID (synchronous, <1ms)
+  // Must be called before any subprocess is spawned
+  initInstanceId()
 
   // Create application menu
   createAppMenu()
@@ -414,6 +421,10 @@ async function shutdownServices(): Promise<void> {
     return
   }
   hasShutdown = true
+
+  // Shutdown health system first (marks clean exit)
+  shutdownHealthSystem()
+
   await disableRemoteAccess().catch(console.error)
   await stopOpenAICompatRouter().catch(console.error)
   await cleanupExtendedServices().catch(console.error)

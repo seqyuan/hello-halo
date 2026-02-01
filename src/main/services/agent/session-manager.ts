@@ -8,6 +8,10 @@
  * reuse the running CC process, avoiding process restart each time (cold start ~3-5s).
  */
 
+import path from 'path'
+import os from 'os'
+import { existsSync, copyFileSync, mkdirSync } from 'fs'
+import { app } from 'electron'
 import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
 import { getConfig, onApiConfigChange } from '../config.service'
 import { getConversation } from '../conversation.service'
@@ -24,10 +28,11 @@ import {
   getWorkingDir,
   getApiCredentials,
   getEnabledMcpServers,
-  buildSystemPromptAppend,
   inferOpenAIWireApi
 } from './helpers'
+import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
+import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 
 // ============================================
 // Session Maps
@@ -76,6 +81,8 @@ function startSessionCleanup(): void {
         } catch (e) {
           console.error(`[Agent] Error closing session ${convId}:`, e)
         }
+        // Unregister from health system
+        unregisterProcess(convId, 'v2-session')
         v2Sessions.delete(convId)
       }
     }
@@ -89,6 +96,85 @@ export function stopSessionCleanup(): void {
   if (cleanupIntervalId) {
     clearInterval(cleanupIntervalId)
     cleanupIntervalId = null
+  }
+}
+
+// ============================================
+// Session Migration
+// ============================================
+
+/**
+ * Migrate session file from old config directory to new config directory on demand.
+ *
+ * Background: We changed CLI config directory from ~/.claude/ to
+ * ~/Library/Application Support/halo/claude-config/ (via CLAUDE_CONFIG_DIR env)
+ * to isolate Halo from user's own Claude Code configuration.
+ *
+ * This causes historical conversations to fail because their sessionId points to
+ * session files in the old directory. This function migrates session files on demand
+ * when user opens a historical conversation.
+ *
+ * Session file path structure:
+ *   $CLAUDE_CONFIG_DIR/projects/<project-dir>/<session-id>.jsonl
+ *
+ * Project directory naming rule (cross-platform):
+ *   Replace path separators (/ \), dots (.), colons (:), and non-ASCII chars with '-'
+ *   e.g., /Users/fly/Desktop/myproject -> -Users-fly-Desktop-myproject
+ *   e.g., C:\Users\fly\.halo\spaces\测试 -> C--Users-fly--halo-spaces---
+ *
+ * @param workDir - Working directory (used to compute project directory name)
+ * @param sessionId - Session ID
+ * @returns true if session file exists in new directory (or migration succeeded),
+ *          false if not found in either directory
+ */
+function migrateSessionIfNeeded(workDir: string, sessionId: string): boolean {
+  // 1. Compute project directory name using the same rule as Claude Code CLI:
+  //    Replace path separators (/ and \), colons (:), dots (.), and all non-ASCII characters with -
+  //    Colon is needed for Windows drive letters (C:)
+  const projectDir = workDir.replace(/[\/\\.:]/g, '-').replace(/[^\x00-\x7F]/g, '-')
+  const sessionFile = `${sessionId}.jsonl`
+
+  console.log(`[Agent] Migration check: workDir="${workDir}" -> projectDir="${projectDir}"`)
+
+  // 2. Build old and new paths
+  const newConfigDir = path.join(app.getPath('userData'), 'claude-config')
+  const oldConfigDir = path.join(os.homedir(), '.claude')
+
+  const newPath = path.join(newConfigDir, 'projects', projectDir, sessionFile)
+  const oldPath = path.join(oldConfigDir, 'projects', projectDir, sessionFile)
+
+  console.log(`[Agent] Checking paths:`)
+  console.log(`[Agent]   New: ${newPath}`)
+  console.log(`[Agent]   Old: ${oldPath}`)
+
+  // 3. Check if already exists in new directory
+  if (existsSync(newPath)) {
+    console.log(`[Agent] ✓ Session file already exists in new directory: ${sessionId}`)
+    return true
+  }
+
+  // 4. Check if exists in old directory
+  if (!existsSync(oldPath)) {
+    console.log(`[Agent] ✗ Session file not found in old directory: ${sessionId}`)
+    return false
+  }
+
+  // 5. Ensure new project directory exists
+  const newProjectDir = path.join(newConfigDir, 'projects', projectDir)
+  if (!existsSync(newProjectDir)) {
+    mkdirSync(newProjectDir, { recursive: true })
+  }
+
+  // 6. Copy file (not move - preserve old directory for user's own Claude Code)
+  try {
+    copyFileSync(oldPath, newPath)
+    console.log(`[Agent] Migrated session file: ${sessionId}`)
+    console.log(`[Agent]   From: ${oldPath}`)
+    console.log(`[Agent]   To: ${newPath}`)
+    return true
+  } catch (error) {
+    console.error(`[Agent] Failed to migrate session file: ${sessionId}`, error)
+    return false
   }
 }
 
@@ -116,6 +202,8 @@ function closeV2SessionForRebuild(conversationId: string): void {
     } catch (e) {
       console.error(`[Agent][${conversationId}] Error closing session:`, e)
     }
+    // Unregister from health system
+    unregisterProcess(conversationId, 'v2-session')
     v2Sessions.delete(conversationId)
   }
 }
@@ -138,13 +226,15 @@ function closeV2SessionForRebuild(conversationId: string): void {
  * @param sdkOptions - SDK options for session creation
  * @param sessionId - Optional session ID for resumption
  * @param config - Session configuration for rebuild detection
+ * @param workDir - Working directory (required for session migration when sessionId is provided)
  */
 export async function getOrCreateV2Session(
   spaceId: string,
   conversationId: string,
   sdkOptions: Record<string, any>,
   sessionId?: string,
-  config?: SessionConfig
+  config?: SessionConfig,
+  workDir?: string
 ): Promise<V2SessionInfo['session']> {
   // Check if we have an existing session for this conversation
   const existing = v2Sessions.get(conversationId)
@@ -165,21 +255,48 @@ export async function getOrCreateV2Session(
   // If sessionId exists, pass resume to let CC restore history from disk
   // After first message, the process stays alive and maintains context in memory
   console.log(`[Agent][${conversationId}] Creating new V2 session...`)
-  if (sessionId) {
+
+  // Handle session resumption with migration support
+  let effectiveSessionId = sessionId
+  if (sessionId && workDir) {
+    // Attempt to migrate session file from old config directory if needed
+    const sessionExists = migrateSessionIfNeeded(workDir, sessionId)
+    if (sessionExists) {
+      console.log(`[Agent][${conversationId}] With resume: ${sessionId}`)
+    } else {
+      // Session file not found in either directory - start fresh conversation
+      console.log(`[Agent][${conversationId}] Session ${sessionId} not found, starting fresh conversation`)
+      effectiveSessionId = undefined
+    }
+  } else if (sessionId) {
     console.log(`[Agent][${conversationId}] With resume: ${sessionId}`)
   }
   const startTime = Date.now()
 
   // Requires SDK patch: resume parameter lets CC restore history from disk
   // Native SDK V2 Session doesn't support resume parameter
-  if (sessionId) {
-    sdkOptions.resume = sessionId
+  if (effectiveSessionId) {
+    sdkOptions.resume = effectiveSessionId
   }
   // Requires SDK patch: native SDK ignores most sdkOptions parameters
   // Use 'as any' to bypass type check, actual params handled by patched SDK
   const session = (await unstable_v2_createSession(sdkOptions as any)) as unknown as V2SDKSession
 
-  console.log(`[Agent][${conversationId}] V2 session created in ${Date.now() - startTime}ms`)
+  // Log PID for health system verification (via SDK patch)
+  const pid = (session as any).pid
+  console.log(`[Agent][${conversationId}] V2 session created in ${Date.now() - startTime}ms, PID: ${pid ?? 'unavailable'}`)
+
+  // Register with health system for orphan detection
+  const instanceId = getCurrentInstanceId()
+  if (instanceId) {
+    registerProcess({
+      id: conversationId,
+      pid: pid ?? null,
+      type: 'v2-session',
+      instanceId,
+      startedAt: Date.now()
+    })
+  }
 
   // Store session with config
   v2Sessions.set(conversationId, {
@@ -250,7 +367,9 @@ export async function ensureSessionWarm(
       key: credentials.apiKey,
       model: credentials.model,
       headers: credentials.customHeaders,
-      apiType
+      apiType,
+      forceStream: credentials.forceStream,
+      filterContent: credentials.filterContent
     })
     // Pass a fake Claude model to CC for normal request handling
     sdkModel = 'claude-sonnet-4-20250514'
@@ -262,12 +381,20 @@ export async function ensureSessionWarm(
     cwd: workDir,
     abortController,  // Consistent with sendMessage
     env: {
+      // Inherit user env: PATH (git, node, python), HOME (config), HTTP_PROXY, LANG, SSH_AUTH_SOCK
       ...process.env,
+
+      // Electron-specific: Run as Node.js process without GUI
       ELECTRON_RUN_AS_NODE: 1,
       ELECTRON_NO_ATTACH_CONSOLE: 1,
+
+      // API credentials for Claude Code
       ANTHROPIC_API_KEY: anthropicApiKey,
       ANTHROPIC_BASE_URL: anthropicBaseUrl,
-      // Ensure localhost bypasses proxy
+
+      // Use Halo's own config directory to avoid conflicts with CC's ~/.claude
+      CLAUDE_CONFIG_DIR: path.join(app.getPath('userData'), 'claude-config'),
+      // Ensure localhost bypasses proxy (for OpenAI compat router)
       NO_PROXY: 'localhost,127.0.0.1',
       no_proxy: 'localhost,127.0.0.1',
       // Disable unnecessary API requests
@@ -281,14 +408,11 @@ export async function ensureSessionWarm(
     stderr: (data: string) => {  // Consistent with sendMessage
       console.error(`[Agent][${conversationId}] CLI stderr (warm):`, data)
     },
-    systemPrompt: {
-      type: 'preset' as const,
-      preset: 'claude_code' as const,
-      append: buildSystemPromptAppend(workDir, credentials.model)
-    },
+    // Use Halo's custom system prompt instead of SDK's 'claude_code' preset
+    systemPrompt: buildSystemPrompt({ workDir, modelInfo: credentials.model }),
     maxTurns: 50,
-    allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'Skill'],
-    settingSources: ['user', 'project'],  // Enable Skills loading from ~/.claude/skills/ and <workspace>/.claude/skills/
+    allowedTools: [...DEFAULT_ALLOWED_TOOLS],
+    settingSources: ['user', 'project'],  // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
     permissionMode: 'acceptEdits' as const,
     canUseTool: createCanUseTool(workDir, spaceId, conversationId),  // Consistent with sendMessage
     includePartialMessages: true,
@@ -303,7 +427,7 @@ export async function ensureSessionWarm(
 
   try {
     console.log(`[Agent] Warming up V2 session: ${conversationId}`)
-    await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId)
+    await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId, undefined, workDir)
     console.log(`[Agent] V2 session warmed up: ${conversationId}`)
   } catch (error) {
     console.error(`[Agent] Failed to warm up session ${conversationId}:`, error)
@@ -327,6 +451,8 @@ export function closeV2Session(conversationId: string): void {
     } catch (e) {
       console.error(`[Agent] Error closing session:`, e)
     }
+    // Unregister from health system
+    unregisterProcess(conversationId, 'v2-session')
     v2Sessions.delete(conversationId)
   }
 }
@@ -343,6 +469,8 @@ export function closeAllV2Sessions(): void {
     } catch (e) {
       console.error(`[Agent] Error closing session ${convId}:`, e)
     }
+    // Unregister from health system
+    unregisterProcess(convId, 'v2-session')
   }
   v2Sessions.clear()
 
@@ -379,6 +507,8 @@ export function invalidateAllSessions(): void {
     } catch (e) {
       console.error(`[Agent] Error closing session ${convId}:`, e)
     }
+    // Unregister from health system
+    unregisterProcess(convId, 'v2-session')
   }
 
   // Remove only sessions that were closed immediately

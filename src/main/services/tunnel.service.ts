@@ -5,6 +5,7 @@
 
 import { ChildProcess, spawn } from 'child_process'
 import { existsSync } from 'fs'
+import { registerProcess, unregisterProcess, getCurrentInstanceId } from './health'
 
 // Tunnel state
 interface TunnelState {
@@ -78,6 +79,18 @@ export async function startTunnel(localPort: number): Promise<string> {
 
       state.process = proc
 
+      // Register with health system for orphan detection
+      const instanceId = getCurrentInstanceId()
+      if (instanceId && proc.pid) {
+        registerProcess({
+          id: 'tunnel',
+          pid: proc.pid,
+          type: 'tunnel',
+          instanceId,
+          startedAt: Date.now()
+        })
+      }
+
       // Set a timeout for URL to be received
       const timeout = setTimeout(() => {
         console.error('[Tunnel] Timeout waiting for URL')
@@ -119,6 +132,8 @@ export async function startTunnel(localPort: number): Promise<string> {
         if (!urlFound) {
           clearTimeout(timeout)
         }
+        // Unregister from health system
+        unregisterProcess('tunnel', 'tunnel')
         state.process = null
         state.url = null
         state.status = 'stopped'
@@ -129,6 +144,8 @@ export async function startTunnel(localPort: number): Promise<string> {
       proc.on('error', (error: Error) => {
         console.error('[Tunnel] Process error:', error)
         clearTimeout(timeout)
+        // Unregister from health system
+        unregisterProcess('tunnel', 'tunnel')
         state.error = error.message
         state.status = 'error'
         state.process = null
@@ -155,6 +172,9 @@ export async function startTunnel(localPort: number): Promise<string> {
 export async function stopTunnel(): Promise<void> {
   if (state.process) {
     console.log('[Tunnel] Stopping tunnel...')
+
+    // Unregister from health system first
+    unregisterProcess('tunnel', 'tunnel')
 
     try {
       state.process.kill('SIGTERM')

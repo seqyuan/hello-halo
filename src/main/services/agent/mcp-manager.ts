@@ -134,7 +134,9 @@ export async function testMcpConnections(
         key: credentials.apiKey,
         model: credentials.model,
         headers: credentials.customHeaders,
-        apiType
+        apiType,
+        forceStream: credentials.forceStream,
+        filterContent: credentials.filterContent
       })
       sdkModel = 'claude-sonnet-4-20250514'
       console.log(`[Agent] MCP test: ${credentials.provider} provider enabled via ${anthropicBaseUrl}, apiType=${apiType}`)

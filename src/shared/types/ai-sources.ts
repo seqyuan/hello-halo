@@ -145,6 +145,7 @@ export interface BackendRequestConfig {
   headers?: Record<string, string>
   apiType?: 'chat_completions' | 'responses'
   forceStream?: boolean
+  filterContent?: boolean
 }
 
 // ============================================================================

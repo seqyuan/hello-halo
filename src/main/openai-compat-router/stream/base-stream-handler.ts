@@ -33,6 +33,9 @@ export interface StreamState {
     cacheReadTokens: number
   }
   stopReason: AnthropicStopReason | null
+  // Debug: accumulated content
+  accumulatedText: string
+  accumulatedThinking: string
 }
 
 export function createInitialState(model: string): StreamState {
@@ -51,7 +54,9 @@ export function createInitialState(model: string): StreamState {
       outputTokens: 0,
       cacheReadTokens: 0
     },
-    stopReason: null
+    stopReason: null,
+    accumulatedText: '',
+    accumulatedThinking: ''
   }
 }
 
@@ -133,6 +138,14 @@ export abstract class BaseStreamHandler {
     // Only check if writer is closed, not if state is finished
     // (state.finished is set when finish_reason is received, but we still need to send final events)
     if (this.writer.isClosed) return
+
+    // Debug: print accumulated content
+    if (this.state.accumulatedThinking) {
+      console.log(`[StreamHandler] Accumulated thinking:\n${this.state.accumulatedThinking}`)
+    }
+    if (this.state.accumulatedText) {
+      console.log(`[StreamHandler] Accumulated text:\n${this.state.accumulatedText}`)
+    }
 
     // Close any open block
     this.closeCurrentBlock()
@@ -238,6 +251,9 @@ export abstract class BaseStreamHandler {
   protected writeTextDelta(text: string): void {
     if (this.isFinished || !text) return
 
+    // Accumulate text for debug logging
+    this.state.accumulatedText += text
+
     // Close thinking block if open and start text block
     this.state.reasoningClosed = true
 
@@ -253,6 +269,9 @@ export abstract class BaseStreamHandler {
 
   protected writeThinkingDelta(thinking: string): void {
     if (this.isFinished || !thinking) return
+
+    // Accumulate thinking for debug logging
+    this.state.accumulatedThinking += thinking
 
     // Don't write thinking if we've already moved to text
     if (this.state.reasoningClosed || this.state.hasTextBlock) return

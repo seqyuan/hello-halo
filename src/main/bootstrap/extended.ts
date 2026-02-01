@@ -31,6 +31,9 @@ import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-
 import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../services/window.service'
+import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
+import { closeAllV2Sessions } from '../services/agent/session-manager'
+import { registerHealthHandlers } from '../ipc/health'
 
 /**
  * Initialize extended services after window is visible
@@ -79,6 +82,10 @@ export function initializeExtendedServices(): void {
   // GitBash: Windows Git Bash detection and setup
   registerGitBashHandlers()
 
+  // Health: System health monitoring and recovery
+  // Register IPC handlers for health queries from renderer
+  registerHealthHandlers()
+
   // Windows-specific: Initialize Git Bash in background
   if (process.platform === 'win32') {
     initializeGitBashOnStartup()
@@ -89,6 +96,17 @@ export function initializeExtendedServices(): void {
         console.error('[Bootstrap] Git Bash initialization failed:', err)
       })
   }
+
+  // Initialize health system asynchronously (non-blocking)
+  // This runs startup checks and starts fallback polling
+  setSessionCleanupFn(closeAllV2Sessions)
+  initializeHealthSystem()
+    .then(() => {
+      console.log('[Bootstrap] Health system initialized')
+    })
+    .catch((err) => {
+      console.error('[Bootstrap] Health system initialization failed:', err)
+    })
 
   const duration = performance.now() - start
   console.log(`[Bootstrap] Extended services registered in ${duration.toFixed(1)}ms`)

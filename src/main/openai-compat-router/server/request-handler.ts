@@ -19,37 +19,7 @@ import {
 } from '../stream'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { withRequestQueue, generateQueueKey } from './request-queue'
-
-/**
- * Filter sensitive content for Tencent provider
- * Removes GitHub URLs that trigger Tencent's content filter
- */
-function filterForTencent(request: any): any {
-  if (!request?.messages) return request
-
-  const filtered = JSON.parse(JSON.stringify(request))
-
-  for (const msg of filtered.messages) {
-    if (typeof msg.content === 'string') {
-      // Remove lines containing GitHub URLs
-      msg.content = msg.content
-        .split('\n')
-        .filter((line: string) => !line.includes('https://github.com/'))
-        .join('\n')
-    } else if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === 'text' && typeof block.text === 'string') {
-          block.text = block.text
-            .split('\n')
-            .filter((line: string) => !line.includes('https://github.com/'))
-            .join('\n')
-        }
-      }
-    }
-  }
-
-  return filtered
-}
+import { runInterceptors } from '../interceptors'
 
 export interface RequestHandlerOptions {
   debug?: boolean
@@ -59,15 +29,80 @@ export interface RequestHandlerOptions {
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
 
 /**
- * Send error response in Anthropic format
+ * Anthropic error type to HTTP status code mapping
+ */
+const ERROR_STATUS_MAP: Record<string, number> = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  permission_error: 403,
+  not_found_error: 404,
+  request_too_large: 413,
+  rate_limit_error: 429,
+  api_error: 500,
+  overloaded_error: 529,
+  timeout_error: 504
+}
+
+/**
+ * HTTP status code to Anthropic error type mapping (official only)
+ */
+const STATUS_ERROR_MAP: Record<number, string> = {
+  400: 'invalid_request_error',
+  401: 'authentication_error',
+  403: 'permission_error',
+  404: 'not_found_error',
+  413: 'request_too_large',
+  429: 'rate_limit_error',
+  500: 'api_error',
+  529: 'overloaded_error'
+}
+
+/**
+ * Get Anthropic error type from HTTP status code
+ */
+function getErrorTypeFromStatus(status: number): string {
+  return STATUS_ERROR_MAP[status] || 'api_error'
+}
+
+/**
+ * Get error type and message from upstream response
+ * Priority: upstream error.type (OpenAI format) > HTTP status mapping > 'api_error'
+ */
+function getUpstreamError(status: number, errorText: string): { type: string; message: string } {
+  try {
+    const json = JSON.parse(errorText)
+    // OpenAI format: { error: { type, message } }
+    if (json?.error?.type) {
+      return { type: json.error.type, message: json.error.message || '' }
+    }
+  } catch {
+    // Not JSON, ignore
+  }
+  return {
+    type: getErrorTypeFromStatus(status),
+    message: errorText || `HTTP ${status}`
+  }
+}
+
+/**
+ * Send error response in Anthropic JSON format
+ *
+ * Returns HTTP error status code + JSON body (not SSE).
+ * SDK recognizes HTTP 4xx/5xx and throws APIError immediately.
  */
 function sendError(
   res: ExpressResponse,
-  statusCode: number,
   errorType: string,
   message: string
 ): void {
-  res.status(statusCode).json({
+  const status = ERROR_STATUS_MAP[errorType] || 500
+  console.log(`[RequestHandler] Sending error: HTTP ${status} ${errorType} - ${message.slice(0, 100)}`)
+
+  res.status(status)
+  res.setHeader('Content-Type', 'application/json')
+  res.setHeader('request-id', `req_${Date.now()}`)
+  res.setHeader('retry-after', '1')
+  res.json({
     type: 'error',
     error: { type: errorType, message }
   })
@@ -124,10 +159,10 @@ export async function handleMessagesRequest(
 ): Promise<void> {
   const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options
   const { url: backendUrl, key: apiKey, model, headers: customHeaders, apiType: configApiType } = config
-
+  console.log('[RequestHandler]handleMessagesRequest',backendUrl)
   // Validate URL has valid endpoint suffix
   if (!isValidEndpointUrl(backendUrl)) {
-    return sendError(res, 400, 'invalid_request_error', getEndpointUrlError(backendUrl))
+    return sendError(res, 'invalid_request_error', getEndpointUrlError(backendUrl))
   }
 
   // Get API type from URL suffix, or use config override (guaranteed non-null after validation)
@@ -147,6 +182,8 @@ export async function handleMessagesRequest(
   // Use request queue to prevent concurrent requests
   const queueKey = generateQueueKey(backendUrl, apiKey)
 
+ 
+
   await withRequestQueue(queueKey, async () => {
     try {
       // Determine stream mode
@@ -164,52 +201,55 @@ export async function handleMessagesRequest(
       console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
       console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
 
-      // Apply Tencent content filter if needed
-      const filteredRequest = backendUrl.includes('tencent')
-        ? filterForTencent(openaiRequest)
-        : openaiRequest
+      // Run through interceptor chain
+      const interceptResult = await runInterceptors(
+        openaiRequest as any,
+        { originalModel: anthropicRequest.model, res }
+      )
+
+      // If interceptor sent a response, we're done
+      if (interceptResult.intercepted && 'responded' in interceptResult) {
+        return
+      }
+
+      // Use potentially modified request from interceptors
+      const interceptedRequest = interceptResult.request
 
       // Make upstream request - URL is used directly, no modification
-      let upstreamResp = await fetchUpstream(backendUrl, apiKey, filteredRequest, timeoutMs, undefined, customHeaders)
+      // console.log(`[RequestHandler] Request body:\n${JSON.stringify(interceptedRequest, null, 2)}`)
+      let upstreamResp = await fetchUpstream(backendUrl, apiKey, interceptedRequest, timeoutMs, undefined, customHeaders)
       console.log(`[RequestHandler] Upstream response: ${upstreamResp.status}`)
 
-      // Handle errors
+      // Handle errors - use upstream error type if available, else map from status
       if (!upstreamResp.ok) {
         const errorText = await upstreamResp.text().catch(() => '')
+        const { type: errorType, message: errorMessage } = getUpstreamError(upstreamResp.status, errorText)
+        console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${errorText.slice(0, 200)}`)
 
-        // Rate limit - return immediately
-        if (upstreamResp.status === 429) {
-          console.error(`[RequestHandler] Provider 429: ${errorText.slice(0, 200)}`)
-          return sendError(res, 429, 'rate_limit_error', `Provider error: ${errorText || 'HTTP 429'}`)
-        }
-
-        // Check if upstream requires stream=true
-        const requiresStream = errorText?.toLowerCase().includes('stream must be set to true')
+        // Check if upstream requires stream=true, retry if needed
+        const errorLower = errorText?.toLowerCase() || ''
+        const requiresStream = errorLower.includes('stream must be set to true') ||
+                               (errorLower.includes('non-stream') && errorLower.includes('not supported'))
 
         if (requiresStream && !wantStream) {
           console.warn('[RequestHandler] Upstream requires stream=true, retrying...')
 
           // Retry with stream enabled
           wantStream = true
-          let retryRequest = apiType === 'responses'
+          const retryRequest = apiType === 'responses'
             ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }).request
             : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }).request
-
-          // Apply Tencent filter to retry request
-          if (backendUrl.includes('tencent')) {
-            retryRequest = filterForTencent(retryRequest)
-          }
 
           upstreamResp = await fetchUpstream(backendUrl, apiKey, retryRequest, timeoutMs, undefined, customHeaders)
 
           if (!upstreamResp.ok) {
             const retryErrorText = await upstreamResp.text().catch(() => '')
+            const { type: retryErrorType, message: retryErrorMessage } = getUpstreamError(upstreamResp.status, retryErrorText)
             console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${retryErrorText.slice(0, 200)}`)
-            return sendError(res, upstreamResp.status, 'api_error', `Provider error: ${retryErrorText || `HTTP ${upstreamResp.status}`}`)
+            return sendError(res, retryErrorType, retryErrorMessage)
           }
         } else {
-          console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${errorText.slice(0, 200)}`)
-          return sendError(res, upstreamResp.status, 'api_error', `Provider error: ${errorText || `HTTP ${upstreamResp.status}`}`)
+          return sendError(res, errorType, errorMessage)
         }
       }
 
@@ -229,6 +269,7 @@ export async function handleMessagesRequest(
 
       // Handle non-streaming response
       const openaiResponse = await upstreamResp.json()
+      console.log(`[RequestHandler] Response body:\n${JSON.stringify(openaiResponse, null, 2)}`)
       const anthropicResponse = apiType === 'responses'
         ? convertOpenAIResponsesToAnthropic(openaiResponse)
         : convertOpenAIChatToAnthropic(openaiResponse, anthropicRequest.model)
@@ -238,11 +279,11 @@ export async function handleMessagesRequest(
       // Handle abort/timeout
       if (error?.name === 'AbortError') {
         console.error('[RequestHandler] AbortError (timeout or client disconnect)')
-        return sendError(res, 504, 'timeout_error', 'Request timed out')
+        return sendError(res, 'timeout_error', 'Request timed out')
       }
 
       console.error('[RequestHandler] Internal error:', error?.message || error)
-      return sendError(res, 500, 'internal_error', error?.message || 'Internal error')
+      return sendError(res, 'api_error', error?.message || 'Internal error')
     }
   })
 }

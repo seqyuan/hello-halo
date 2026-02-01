@@ -7,3 +7,6 @@
 
 // AI Sources types
 export * from './ai-sources'
+
+// Health System types
+export * from './health'

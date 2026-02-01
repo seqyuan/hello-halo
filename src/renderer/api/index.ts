@@ -15,6 +15,14 @@ import {
   clearAuthToken,
   getAuthToken
 } from './transport'
+import type {
+  HealthStatusResponse,
+  HealthStateResponse,
+  HealthRecoveryResponse,
+  HealthReportResponse,
+  HealthExportResponse,
+  HealthCheckResponse
+} from '../../shared/types'
 
 // Response type
 interface ApiResponse<T = unknown> {
@@ -1082,6 +1090,56 @@ export const api = {
       return () => {}
     }
     return window.halo.onBootstrapExtendedReady(callback)
+  },
+
+  // ===== Health System (Electron only) =====
+  getHealthStatus: async (): Promise<ApiResponse<HealthStatusResponse>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.getHealthStatus()
+  },
+
+  getHealthState: async (): Promise<ApiResponse<HealthStateResponse>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.getHealthState()
+  },
+
+  triggerHealthRecovery: async (strategyId: string, userConsented: boolean): Promise<ApiResponse<HealthRecoveryResponse>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.triggerHealthRecovery(strategyId, userConsented)
+  },
+
+  generateHealthReport: async (): Promise<ApiResponse<HealthReportResponse>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.generateHealthReport()
+  },
+
+  generateHealthReportText: async (): Promise<ApiResponse<string>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.generateHealthReportText()
+  },
+
+  exportHealthReport: async (filePath?: string): Promise<ApiResponse<HealthExportResponse>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.exportHealthReport(filePath)
+  },
+
+  runHealthCheck: async (): Promise<ApiResponse<HealthCheckResponse>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.runHealthCheck()
   },
 }
 

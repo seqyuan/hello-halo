@@ -30,6 +30,7 @@ interface TodoItem {
 
 interface TodoCardProps {
   todos: TodoItem[]
+  isAgentActive?: boolean  // When false and todo is in_progress, show interrupted state
 }
 
 // Get icon and style for todo status
@@ -61,9 +62,12 @@ function getTodoStatusDisplay(status: TodoStatus) {
 }
 
 // Single todo item
-function TodoItemRow({ item, index }: { item: TodoItem; index: number }) {
+function TodoItemRow({ item, index, isAgentActive = true }: { item: TodoItem; index: number; isAgentActive?: boolean }) {
   const display = getTodoStatusDisplay(item.status)
   const Icon = display.Icon
+
+  // Detect interrupted state: agent stopped but todo still in_progress
+  const isInterrupted = !isAgentActive && item.status === 'in_progress'
 
   // Show activeForm when in progress, otherwise show content
   const displayText = item.status === 'in_progress' && item.activeForm
@@ -74,26 +78,26 @@ function TodoItemRow({ item, index }: { item: TodoItem; index: number }) {
     <div
       className={`
         flex items-start gap-3 px-3 py-2 rounded-lg transition-all duration-200
-        ${display.bgColor}
-        ${item.status === 'in_progress' ? 'animate-fade-in' : ''}
+        ${isInterrupted ? 'bg-amber-500/10' : display.bgColor}
+        ${item.status === 'in_progress' && !isInterrupted ? 'animate-fade-in' : ''}
       `}
     >
       <Icon
         size={16}
         className={`
           flex-shrink-0 mt-0.5
-          ${display.color}
-          ${display.spin ? 'animate-spin' : ''}
+          ${isInterrupted ? 'text-amber-500' : display.color}
+          ${display.spin && !isInterrupted ? 'animate-spin' : ''}
         `}
       />
-      <span className={`text-sm leading-relaxed ${display.textStyle}`}>
+      <span className={`text-sm leading-relaxed ${isInterrupted ? 'text-amber-600 dark:text-amber-400' : display.textStyle}`}>
         {displayText}
       </span>
     </div>
   )
 }
 
-export function TodoCard({ todos }: TodoCardProps) {
+export function TodoCard({ todos, isAgentActive = true }: TodoCardProps) {
   const { t } = useTranslation()
   // Calculate progress stats
   const stats = useMemo(() => {
@@ -145,7 +149,7 @@ export function TodoCard({ todos }: TodoCardProps) {
         {/* Todo items */}
         <div className="p-2 space-y-1">
           {todos.map((item, index) => (
-            <TodoItemRow key={index} item={item} index={index} />
+            <TodoItemRow key={index} item={item} index={index} isAgentActive={isAgentActive} />
           ))}
         </div>
 

@@ -58,7 +58,10 @@ function ThoughtItem({ thought }: { thought: Thought }) {
       <div className="flex items-center gap-2">
         <Icon size={14} className={`${color} shrink-0`} />
         <span className={`font-medium ${color} flex-1 min-w-0 truncate`}>
-          {t(getThoughtLabelKey(thought.type))}
+          {(() => {
+            const label = getThoughtLabelKey(thought.type)
+            return label === 'AI' ? label : t(label)
+          })()}
           {thought.toolName && ` - ${thought.toolName}`}
         </span>
         <span className="text-muted-foreground/40 text-[10px] shrink-0">

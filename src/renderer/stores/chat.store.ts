@@ -698,14 +698,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? (session.streamingContent || '') + delta
         : (content ?? session.streamingContent)
 
-      if (isNewTextBlock) {
-        console.log(`[ChatStore] 🆕 New text block signal [${conversationId}]: version ${newTextBlockVersion}`)
-      } else if (delta) {
-        console.log(`[ChatStore] handleAgentMessage [${conversationId}]: +${delta.length} chars (total: ${newContent.length})`)
-      } else {
-        console.log(`[ChatStore] handleAgentMessage [${conversationId}]:`, content?.substring(0, 100), `streaming: ${isStreaming}`)
-      }
-
       newSessions.set(conversationId, {
         ...session,
         streamingContent: newContent,
@@ -737,7 +729,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // Handle tool result for a specific conversation
   handleAgentToolResult: (data) => {
     const { conversationId, toolId } = data
-    console.log(`[ChatStore] handleAgentToolResult [${conversationId}]:`, toolId)
+    // console.log(`[ChatStore] handleAgentToolResult [${conversationId}]:`, toolId)
     // Tool results are tracked in thoughts, no additional state needed
   },
 

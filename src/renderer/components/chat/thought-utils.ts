@@ -19,6 +19,12 @@ import {
 import { getToolIcon } from '../icons/ToolIcons'
 import type { Thought } from '../../types'
 
+// i18n static keys for extraction (DO NOT REMOVE)
+// prettier-ignore
+void function _i18nThoughtKeys(t: (k: string) => string) {
+  t('Thinking'); t('Tool call'); t('Tool result'); t('System'); t('Error'); t('Complete')
+}
+
 // ============================================
 // Text Utilities
 // ============================================
@@ -94,12 +100,10 @@ export function getThoughtColor(type: Thought['type'], isError?: boolean): strin
 }
 
 /**
- * Get i18n translation key for thought type label
- *
- * Usage: t(getThoughtLabelKey(thought.type))
+ * Get display label for thought type
  *
  * @param type - Thought type
- * @returns Translation key string
+ * @returns Display label string (English, not translated)
  */
 export function getThoughtLabelKey(type: Thought['type']): string {
   switch (type) {

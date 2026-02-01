@@ -7,9 +7,10 @@
  *   npm run i18n:translate -- --force  # Full translation
  *
  * Environment variables (from .env.local):
- *   HALO_TEST_API_KEY - API Key
- *   HALO_TEST_API_URL - API URL
- *   HALO_TEST_MODEL   - Model name
+ *   HALO_TEST_API_KEY    - API Key
+ *   HALO_TEST_API_URL    - API URL
+ *   HALO_TEST_MODEL      - Model name
+ *   HALO_TEST_API_FORMAT - API format: 'anthropic' or 'openai' (default: auto-detect)
  */
 
 import fs from 'node:fs'
@@ -114,7 +115,22 @@ function getKeysToTranslate(sourceJson, targetJson, force = false) {
   return Object.keys(sourceJson).filter((key) => !targetJson[key] || targetJson[key] === '')
 }
 
-// Call LLM API for translation
+// Detect API format based on URL or explicit config
+function detectApiFormat(apiUrl) {
+  const explicit = process.env.HALO_TEST_API_FORMAT?.toLowerCase()
+  if (explicit === 'anthropic' || explicit === 'openai') {
+    return explicit
+  }
+
+  // Auto-detect based on URL
+  if (apiUrl.includes('anthropic.com')) {
+    return 'anthropic'
+  }
+  // Default to OpenAI format for other providers (OpenAI, DeepSeek, Moonshot, etc.)
+  return 'openai'
+}
+
+// Call LLM API for translation (supports both Anthropic and OpenAI formats)
 async function translateBatch(texts, targetLocale) {
   const apiKey = process.env.HALO_TEST_API_KEY
   const apiUrl = process.env.HALO_TEST_API_URL
@@ -123,6 +139,8 @@ async function translateBatch(texts, targetLocale) {
   if (!apiKey || !apiUrl) {
     throw new Error('Missing HALO_TEST_API_KEY or HALO_TEST_API_URL in .env.local')
   }
+
+  const apiFormat = detectApiFormat(apiUrl)
 
   // Build examples
   const exampleInput = { "Save": "Save", "Space": "Space", "{{count}} files": "{{count}} files" }
@@ -173,24 +191,37 @@ ${JSON.stringify(texts, null, 2)}
 \`\`\`
 `
 
-  const response = await fetch(`${apiUrl}/v1/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: model || 'claude-haiku-4-5-20251001',
-      max_tokens: 32768,
-      messages: [
-        {
-          role: 'user',
-          content: prompt
-        }
-      ]
+  let response
+  if (apiFormat === 'anthropic') {
+    // Anthropic Messages API
+    response = await fetch(`${apiUrl}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: model || 'claude-haiku-4-5-20251001',
+        max_tokens: 32768,
+        messages: [{ role: 'user', content: prompt }]
+      })
     })
-  })
+  } else {
+    // OpenAI Chat Completions API (compatible with OpenAI, DeepSeek, Moonshot, etc.)
+    response = await fetch(`${apiUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model || 'gpt-4o-mini',
+        max_tokens: 32768,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    })
+  }
 
   if (!response.ok) {
     const error = await response.text()
@@ -198,7 +229,14 @@ ${JSON.stringify(texts, null, 2)}
   }
 
   const data = await response.json()
-  const content = data.content[0].text
+
+  // Extract content based on API format
+  let content
+  if (apiFormat === 'anthropic') {
+    content = data.content[0].text
+  } else {
+    content = data.choices[0].message.content
+  }
 
   // Extract JSON (robust parsing)
   const parsed = extractJson(content)
@@ -294,7 +332,8 @@ async function main() {
   console.log('\n🌍 i18n Auto Translator\n')
   console.log(`   Mode: ${force ? 'Force (translate all)' : 'Incremental (empty values only)'}`)
   console.log(`   API: ${process.env.HALO_TEST_API_URL}`)
-  console.log(`   Model: ${process.env.HALO_TEST_MODEL}\n`)
+  console.log(`   Model: ${process.env.HALO_TEST_MODEL}`)
+  console.log(`   Format: ${detectApiFormat(process.env.HALO_TEST_API_URL)}\n`)
 
   // Read source file
   const sourceFile = path.join(CONFIG.localesDir, `${CONFIG.sourceLocale}.json`)

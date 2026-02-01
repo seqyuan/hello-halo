@@ -3,6 +3,14 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  HealthStatusResponse,
+  HealthStateResponse,
+  HealthRecoveryResponse,
+  HealthReportResponse,
+  HealthExportResponse,
+  HealthCheckResponse
+} from '../shared/types'
 
 // Type definitions for exposed API
 export interface HaloAPI {
@@ -267,6 +275,15 @@ export interface HaloAPI {
     extendedReadyAt: number
   }>>
   onBootstrapExtendedReady: (callback: (data: { timestamp: number; duration: number }) => void) => () => void
+
+  // Health System
+  getHealthStatus: () => Promise<IpcResponse<HealthStatusResponse>>
+  getHealthState: () => Promise<IpcResponse<HealthStateResponse>>
+  triggerHealthRecovery: (strategyId: string, userConsented: boolean) => Promise<IpcResponse<HealthRecoveryResponse>>
+  generateHealthReport: () => Promise<IpcResponse<HealthReportResponse>>
+  generateHealthReportText: () => Promise<IpcResponse<string>>
+  exportHealthReport: (filePath?: string) => Promise<IpcResponse<HealthExportResponse>>
+  runHealthCheck: () => Promise<IpcResponse<HealthCheckResponse>>
 }
 
 interface IpcResponse<T = unknown> {
@@ -482,6 +499,15 @@ const api: HaloAPI = {
   // Bootstrap lifecycle
   getBootstrapStatus: () => ipcRenderer.invoke('bootstrap:get-status'),
   onBootstrapExtendedReady: (callback) => createEventListener('bootstrap:extended-ready', callback as (data: unknown) => void),
+
+  // Health System
+  getHealthStatus: () => ipcRenderer.invoke('health:get-status'),
+  getHealthState: () => ipcRenderer.invoke('health:get-state'),
+  triggerHealthRecovery: (strategyId, userConsented) => ipcRenderer.invoke('health:trigger-recovery', strategyId, userConsented),
+  generateHealthReport: () => ipcRenderer.invoke('health:generate-report'),
+  generateHealthReportText: () => ipcRenderer.invoke('health:generate-report-text'),
+  exportHealthReport: (filePath) => ipcRenderer.invoke('health:export-report', filePath),
+  runHealthCheck: () => ipcRenderer.invoke('health:run-check'),
 }
 
 contextBridge.exposeInMainWorld('halo', api)

@@ -1,8 +1,19 @@
 diff --git a/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs b/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
-index 1e1c3e4..fb4d469 100755
+index 1e1c3e4..e9360ef 100755
 --- a/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 +++ b/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
-@@ -13174,9 +13174,7 @@ class ProcessTransport {
+@@ -13020,6 +13020,10 @@ class ProcessTransport {
+     const mappedProcess = {
+       stdin: childProcess.stdin,
+       stdout: childProcess.stdout,
++      // [PATCHED] Expose pid for health system process tracking
++      get pid() {
++        return childProcess.pid;
++      },
+       get killed() {
+         return childProcess.killed;
+       },
+@@ -13174,9 +13178,7 @@ class ProcessTransport {
            args.push(`--${flag}`, value);
          }
        }
@@ -13,7 +24,7 @@ index 1e1c3e4..fb4d469 100755
        delete env.NODE_OPTIONS;
        if (env.DEBUG_CLAUDE_AGENT_SDK) {
          env.DEBUG = "1";
-@@ -13986,38 +13984,54 @@ class SessionImpl {
+@@ -13986,38 +13988,66 @@ class SessionImpl {
        pathToClaudeCodeExecutable = join4(dirname2, "cli.js");
      }
      const processEnv = { ...options.env ?? process.env };
@@ -48,7 +59,10 @@ index 1e1c3e4..fb4d469 100755
 -      maxTurns: undefined,
 -      maxBudgetUsd: undefined,
 +      extraArgs: options.extraArgs ?? {},
-+      customSystemPrompt: options.systemPrompt?.append ?? "",
++      // [PATCHED] Support both string (full custom) and { append } (append mode)
++      customSystemPrompt: typeof options.systemPrompt === 'string'
++        ? options.systemPrompt
++        : (options.systemPrompt?.append ?? ""),
 +      maxThinkingTokens: options.maxThinkingTokens ?? undefined,
 +      maxTurns: options.maxTurns ?? undefined,
 +      maxBudgetUsd: options.maxBudgetUsd ?? undefined,
@@ -84,12 +98,21 @@ index 1e1c3e4..fb4d469 100755
 +      resumeSessionAt: options.resumeSessionAt ?? undefined
      });
 -    this.query = new Query(transport, false, undefined, undefined, this.abortController, new Map);
++    // [PATCHED] Build initConfig to pass systemPrompt to Query (mirrors query() behavior)
++    const customSystemPrompt = typeof options.systemPrompt === 'string'
++      ? options.systemPrompt
++      : (options.systemPrompt?.append ?? "");
++    const initConfig = {
++      systemPrompt: customSystemPrompt,
++      appendSystemPrompt: options.systemPrompt?.type === 'preset' ? options.systemPrompt.append : undefined,
++      agents: options.agents
++    };
 +    // Pass the extracted SDK MCP server instances to Query
-+    this.query = new Query(transport, false, options.canUseTool, options.hooks, this.abortController, sdkMcpServers);
++    this.query = new Query(transport, false, options.canUseTool, options.hooks, this.abortController, sdkMcpServers, undefined, initConfig);
      this.query.streamInput(this.inputStream);
    }
    async send(message) {
-@@ -14053,6 +14067,18 @@ class SessionImpl {
+@@ -14053,6 +14083,22 @@ class SessionImpl {
        }
      }
    }
@@ -105,10 +128,14 @@ index 1e1c3e4..fb4d469 100755
 +  async setPermissionMode(mode) {
 +    return this.query.setPermissionMode(mode);
 +  }
++  // [PATCHED] Expose subprocess PID for health system process tracking
++  get pid() {
++    return this.query?.transport?.process?.pid;
++  }
    close() {
      if (this.closed) {
        return;
-@@ -26725,7 +26751,7 @@ function query({
+@@ -26725,7 +26771,7 @@ function query({
      const dirname2 = join5(filename, "..");
      pathToClaudeCodeExecutable = join5(dirname2, "cli.js");
    }
@@ -117,7 +144,7 @@ index 1e1c3e4..fb4d469 100755
    const {
      abortController = createAbortController(),
      additionalDirectories = [],
-@@ -26767,9 +26793,7 @@ function query({
+@@ -26767,9 +26813,7 @@ function query({
    if (!processEnv) {
      processEnv = { ...process.env };
    }

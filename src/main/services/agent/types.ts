@@ -24,6 +24,10 @@ export interface ApiCredentials {
   customHeaders?: Record<string, string>
   /** API type for OpenAI compatible providers */
   apiType?: 'chat_completions' | 'responses'
+  /** Force streaming mode (for providers that only support streaming) */
+  forceStream?: boolean
+  /** Filter sensitive content from messages (e.g., GitHub URLs) */
+  filterContent?: boolean
 }
 
 // ============================================
@@ -114,6 +118,7 @@ export interface Thought {
   toolInput?: Record<string, unknown>
   toolOutput?: string
   isError?: boolean
+  errorCode?: string  // Original SDK error code (rate_limit, authentication_failed, etc.)
   duration?: number
   // For streaming state (real-time updates)
   isStreaming?: boolean  // True while content is being streamed

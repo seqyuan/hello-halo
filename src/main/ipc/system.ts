@@ -24,24 +24,31 @@ export function registerSystemHandlers(): void {
       })
     }
   })
+
   // Get auto launch status
   ipcMain.handle('system:get-auto-launch', async () => {
+    console.log('[Settings] system:get-auto-launch - Getting auto launch status')
     try {
       const enabled = getAutoLaunch()
+      console.log('[Settings] system:get-auto-launch - Status:', enabled)
       return { success: true, data: enabled }
     } catch (error) {
       const err = error as Error
+      console.error('[Settings] system:get-auto-launch - Failed:', err.message)
       return { success: false, error: err.message }
     }
   })
 
   // Set auto launch
   ipcMain.handle('system:set-auto-launch', async (_event, enabled: boolean) => {
+    console.log('[Settings] system:set-auto-launch - Setting to:', enabled)
     try {
       setAutoLaunch(enabled)
+      console.log('[Settings] system:set-auto-launch - Set successfully')
       return { success: true, data: enabled }
     } catch (error) {
       const err = error as Error
+      console.error('[Settings] system:set-auto-launch - Failed:', err.message)
       return { success: false, error: err.message }
     }
   })
@@ -123,15 +130,19 @@ export function registerSystemHandlers(): void {
 
   // Open log folder in system file manager
   ipcMain.handle('system:open-log-folder', async () => {
+    console.log('[Settings] system:open-log-folder - Opening log folder')
     try {
       const logFile = log.transports.file.getFile()
       const logDir = dirname(logFile.path)
       await shell.openPath(logDir)
+      console.log('[Settings] system:open-log-folder - Opened:', logDir)
       return { success: true, data: logDir }
     } catch (error) {
       const err = error as Error
+      console.error('[Settings] system:open-log-folder - Failed:', err.message)
       return { success: false, error: err.message }
     }
   })
 
+  console.log('[Settings] System handlers registered')
 }

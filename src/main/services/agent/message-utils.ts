@@ -100,6 +100,7 @@ function generateThoughtId(): string {
   return `thought-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 }
 
+
 /**
  * Parse SDK message into a Thought object
  *
@@ -128,6 +129,21 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
 
   // Assistant messages (thinking, tool_use, text blocks)
   if (message.type === 'assistant') {
+    // Check for SDK error field (rate_limit, authentication_failed, billing_error, etc.)
+    // Pass through raw error message as-is - no transformation
+    if (message.error) {
+      const rawErrorMessage = message.message?.error_message || message.error
+      console.log(`[parseSDKMessage] SDK assistant error: ${message.error}, message: ${rawErrorMessage}`)
+      return {
+        id: generateThoughtId(),
+        type: 'error',
+        content: rawErrorMessage,
+        timestamp,
+        isError: true,
+        errorCode: message.error
+      }
+    }
+
     const content = message.message?.content
     if (Array.isArray(content)) {
       for (const block of content) {
@@ -198,12 +214,23 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
   }
 
   // Final result
+  // Simple approach: always use message.result regardless of is_error
+  // The result field contains the actual content (success message or error details)
   if (message.type === 'result') {
+    const resultContent = message.message?.result || message.result || ''
+    const isError = message.is_error || false
+
+    if (isError) {
+      console.log(`[parseSDKMessage] SDK result error: subtype=${message.subtype}, result=${resultContent.substring(0, 200)}`)
+    }
+
     return {
       id: generateThoughtId(),
-      type: 'result',
-      content: message.message?.result || message.result || '',
+      type: isError ? 'error' : 'result',
+      content: resultContent,
       timestamp,
+      isError,
+      errorCode: isError ? message.subtype : undefined,
       duration: message.duration_ms
     }
   }
