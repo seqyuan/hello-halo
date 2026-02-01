@@ -43,5 +43,10 @@ export function normalizeApiUrl(apiUrl: string, provider: 'anthropic' | 'openai'
     normalized = normalized.slice(0, -5)
   }
 
+  // Host-only URL defaults to OpenAI's /v1 API base.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]+$/.test(normalized)) {
+    normalized = `${normalized}/v1`
+  }
+
   return `${normalized}/chat/completions`
 }
