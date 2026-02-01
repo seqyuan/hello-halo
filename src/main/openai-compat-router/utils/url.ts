@@ -38,25 +38,10 @@ export function normalizeApiUrl(apiUrl: string, provider: 'anthropic' | 'openai'
     return normalized
   }
 
-  // Strip partial endpoint suffixes
-  const partialSuffixes = ['/v1/chat', '/chat', '/v1/']
-  for (const suffix of partialSuffixes) {
-    if (normalized.endsWith(suffix)) {
-      normalized = normalized.slice(0, -suffix.length)
-      break
-    }
+  // Strip incomplete path suffix
+  if (normalized.endsWith('/chat')) {
+    normalized = normalized.slice(0, -5)
   }
 
-  // Ensure /v1 prefix exists
-  const hasV1 = normalized.includes('/v1')
-  if (hasV1) {
-    // Extract up to /v1
-    const v1Idx = normalized.indexOf('/v1')
-    normalized = normalized.slice(0, v1Idx + 3)
-  } else {
-    normalized = `${normalized}/v1`
-  }
-
-  // Append standard endpoint
   return `${normalized}/chat/completions`
 }

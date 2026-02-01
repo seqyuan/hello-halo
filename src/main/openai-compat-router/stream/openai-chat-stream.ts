@@ -11,7 +11,7 @@ import {
   type StreamHandlerOptions
 } from './base-stream-handler'
 import { safeJsonParse } from '../utils'
-import type { OpenAIChatChunk, AnthropicStopReason } from '../types'
+import type { OpenAIChatChunk, OpenAIChatAnnotation, AnthropicStopReason } from '../types'
 
 export class OpenAIChatStreamHandler extends BaseStreamHandler {
   // Track <think> tag state for providers that use XML-style thinking
@@ -103,14 +103,20 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
 
     const delta = choice.delta
 
-    // Process reasoning/thinking (some providers use delta.reasoning)
-    if (typeof (delta as any)?.reasoning === 'string' && (delta as any).reasoning !== '') {
-      this.writeThinkingDelta((delta as any).reasoning)
+    // Process reasoning/thinking content
+    // Priority: reasoning > reasoning_content (both are string fields)
+    // - reasoning: Used by OpenAI o1/o3, some providers
+    // - reasoning_content: Used by DeepSeek R1
+    if (typeof delta?.reasoning === 'string' && delta.reasoning !== '') {
+      this.writeThinkingDelta(delta.reasoning)
+    } else if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content !== '') {
+      this.writeThinkingDelta(delta.reasoning_content)
     }
 
     // Process structured thinking (delta.thinking with content/signature)
-    if ((delta as any)?.thinking) {
-      const thinking = (delta as any).thinking
+    // Used by providers that send thinking in a structured format
+    if (delta?.thinking) {
+      const thinking = delta.thinking
       if (thinking.signature) {
         this.writeSignatureDelta(thinking.signature)
       } else if (thinking.content) {
@@ -124,8 +130,8 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
     }
 
     // Process annotations (web search results)
-    if ((delta as any)?.annotations?.length) {
-      this.processAnnotations((delta as any).annotations)
+    if (delta?.annotations?.length) {
+      this.processAnnotations(delta.annotations)
     }
 
     // Process tool calls
@@ -192,9 +198,7 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
   /**
    * Process annotations (web search results)
    */
-  private processAnnotations(
-    annotations: Array<{ url_citation?: { url?: string; title?: string } }>
-  ): void {
+  private processAnnotations(annotations: OpenAIChatAnnotation[]): void {
     const toolUseId = `srvtoolu_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
 
     const results = annotations.map((ann) => ({

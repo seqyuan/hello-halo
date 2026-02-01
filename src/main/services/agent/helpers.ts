@@ -153,31 +153,30 @@ export function getWorkingDir(spaceId: string): string {
 // ============================================
 
 /**
- * Get API credentials based on current aiSources configuration
+ * Get API credentials based on current aiSources configuration (v2)
  * This is the central place that determines which API to use
- * Now uses AISourceManager for unified access
+ * Now uses AISourceManager for unified access with v2 format
  */
 export async function getApiCredentials(config: ReturnType<typeof getConfig>): Promise<ApiCredentials> {
   const manager = getAISourceManager()
   await manager.ensureInitialized()
 
-  // Debug logging
   console.log('[AgentService] getApiCredentials called')
 
-  // Ensure token is valid for OAuth providers
-  const aiSources = (config as any).aiSources
-  const currentSource = aiSources?.current || 'custom'
+  // Get current source from manager (v2 format)
+  const currentSource = manager.getCurrentSourceConfig()
 
-  console.log('[AgentService] currentSource:', currentSource)
-  console.log('[AgentService] aiSources:', JSON.stringify({
-    current: aiSources?.current,
-    hasCustom: !!aiSources?.custom?.apiKey
-  }, null, 2))
+  console.log('[AgentService] currentSource:', currentSource ? {
+    id: currentSource.id,
+    name: currentSource.name,
+    provider: currentSource.provider,
+    authType: currentSource.authType
+  } : null)
 
-  // Check if current source is an OAuth provider (not 'custom')
-  if (currentSource !== 'custom') {
-    console.log('[AgentService] Checking OAuth token validity for:', currentSource)
-    const tokenResult = await manager.ensureValidToken(currentSource)
+  // Ensure token is valid for OAuth sources
+  if (currentSource?.authType === 'oauth') {
+    console.log('[AgentService] Checking OAuth token validity for:', currentSource.name)
+    const tokenResult = await manager.ensureValidToken(currentSource.id)
     console.log('[AgentService] Token check result:', tokenResult.success)
     if (!tokenResult.success) {
       throw new Error('OAuth token expired or invalid. Please login again.')
@@ -187,22 +186,29 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
   // Get backend config from manager
   console.log('[AgentService] Calling manager.getBackendConfig()')
   const backendConfig = manager.getBackendConfig()
-  console.log('[AgentService] backendConfig:', backendConfig ? { url: backendConfig.url, model: backendConfig.model, hasKey: !!backendConfig.key } : null)
+  console.log('[AgentService] backendConfig:', backendConfig ? {
+    url: backendConfig.url,
+    model: backendConfig.model,
+    hasKey: !!backendConfig.key
+  } : null)
 
   if (!backendConfig) {
     throw new Error('No AI source configured. Please configure an API key or login.')
   }
 
-  // Determine provider type
+  // Determine provider type based on current source
   let provider: 'anthropic' | 'openai' | 'oauth'
 
-  if (currentSource !== 'custom') {
+  if (currentSource?.authType === 'oauth') {
     provider = 'oauth'
-    console.log(`[Agent] Using OAuth provider ${currentSource} via AISourceManager`)
+    console.log(`[Agent] Using OAuth provider ${currentSource.provider} via AISourceManager`)
+  } else if (currentSource?.provider === 'anthropic') {
+    provider = 'anthropic'
+    console.log(`[Agent] Using Anthropic API via AISourceManager`)
   } else {
-    // Custom API - check provider from config
-    provider = aiSources?.custom?.provider === 'openai' ? 'openai' : 'anthropic'
-    console.log(`[Agent] Using custom API (${provider}) via AISourceManager`)
+    // OpenAI-compatible providers (deepseek, siliconflow, etc.)
+    provider = 'openai'
+    console.log(`[Agent] Using OpenAI-compatible API (${currentSource?.provider || 'unknown'}) via AISourceManager`)
   }
 
   return {

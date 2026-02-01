@@ -6,11 +6,13 @@
  */
 
 import { useState } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import { useAppStore } from '../../stores/app.store'
 import { api } from '../../api'
 import { Lightbulb, CheckCircle2, XCircle } from '../icons/ToolIcons'
 import { Globe, ChevronDown, ArrowLeft, Eye, EyeOff, Loader2, RefreshCw } from 'lucide-react'
-import { AVAILABLE_MODELS, DEFAULT_MODEL } from '../../types'
+import { AVAILABLE_MODELS, DEFAULT_MODEL, type AISourcesConfig, type AISource } from '../../types'
+import { getBuiltinProvider } from '../../types'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 
 interface ApiSetupProps {
@@ -176,24 +178,46 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
 
       // 2. Validation passed, use normalized URL from backend
       const normalizedUrl = result.data.normalizedUrl || effectiveApiUrl
+      const now = new Date().toISOString()
 
-      const customConfig = {
-        provider: provider as 'anthropic' | 'openai',
-        apiKey,
+      // Build v2 AISource
+      const providerType = provider as 'anthropic' | 'openai'
+      const builtin = getBuiltinProvider(providerType)
+
+      const newSource: AISource = {
+        id: uuidv4(),
+        name: builtin?.name || (providerType === 'anthropic' ? 'Claude API' : 'Custom API'),
+        provider: providerType,
+        authType: 'api-key',
         apiUrl: normalizedUrl,
+        apiKey,
         model,
-        availableModels: fetchedModels
+        availableModels: fetchedModels.length > 0
+          ? fetchedModels.map(id => ({ id, name: id }))
+          : builtin?.models || [{ id: model, name: model }],
+        createdAt: now,
+        updatedAt: now
+      }
+
+      // Build v2 aiSources config
+      const newAiSources: AISourcesConfig = {
+        version: 2,
+        currentId: newSource.id,
+        sources: [newSource]
       }
 
       const newConfig = {
         ...config,
         // Legacy api field for backward compatibility
-        api: customConfig,
-        // New aiSources structure
-        aiSources: {
-          current: 'custom' as const,
-          custom: customConfig
+        api: {
+          provider: providerType,
+          apiKey,
+          apiUrl: normalizedUrl,
+          model,
+          availableModels: fetchedModels
         },
+        // v2 aiSources structure
+        aiSources: newAiSources,
         isFirstLaunch: false
       }
 

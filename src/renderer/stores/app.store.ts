@@ -207,7 +207,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         // Determine initial view based on config
         // Show setup if first launch or no AI source configured (OAuth or Custom API)
-        if (config.isFirstLaunch || !hasAnyAISource(config)) {
+        if (config.isFirstLaunch || !hasAnyAISource(config.aiSources)) {
           console.log('[Store] First launch or no AI source, showing setup')
           set({ view: 'setup' })
         } else {

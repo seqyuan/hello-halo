@@ -6,10 +6,19 @@ import { app } from 'electron'
 import { join } from 'path'
 import { homedir } from 'os'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { v4 as uuidv4 } from 'uuid'
 
 // Import analytics config type
 import type { AnalyticsConfig } from './analytics/types'
-import type { AISourcesConfig, CustomSourceConfig } from '../../shared/types'
+import type {
+  AISourcesConfig,
+  AISource,
+  LegacyAISourcesConfig,
+  OAuthSourceConfig,
+  CustomSourceConfig,
+  ModelOption
+} from '../../shared/types'
+import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { decryptString } from './secure-storage.service'
 
 // ============================================================================
@@ -323,7 +332,9 @@ const DEFAULT_CONFIG: HaloConfig = {
     model: DEFAULT_MODEL
   },
   aiSources: {
-    current: 'custom'
+    version: 2,
+    currentId: null,
+    sources: []
   },
   permissions: {
     fileAccess: 'allow',
@@ -348,54 +359,240 @@ const DEFAULT_CONFIG: HaloConfig = {
   isFirstLaunch: true
 }
 
-function normalizeAiSources(parsed: Record<string, any>): AISourcesConfig {
+// ============================================================================
+// AI SOURCES V2 MIGRATION
+// ============================================================================
+// v1 format: { current: 'custom', custom: {...}, oauth: {...}, 'github-copilot': {...} }
+// v2 format: { version: 2, currentId: 'uuid', sources: [...] }
+//
+// Migration handles:
+// 1. Legacy api field only (no aiSources)
+// 2. v1 aiSources with custom/oauth/dynamic keys
+// 3. Pre-release formats with custom_xxx keys (cleared)
+// ============================================================================
+
+/**
+ * Check if aiSources is already v2 format
+ */
+function isV2AiSources(raw: unknown): raw is AISourcesConfig {
+  if (!raw || typeof raw !== 'object') return false
+  const obj = raw as Record<string, unknown>
+  return obj.version === 2 && Array.isArray(obj.sources)
+}
+
+/**
+ * Migrate legacy aiSources (v1) to v2 format
+ */
+function migrateAiSourcesToV2(parsed: Record<string, any>): AISourcesConfig {
   const raw = parsed?.aiSources
+  const now = new Date().toISOString()
 
-  // If aiSources already exists, use it directly (no auto-rebuild from legacy api)
+  // Already v2 format - return as is
+  if (isV2AiSources(raw)) {
+    return raw
+  }
+
+  // Initialize empty v2 config
+  const newConfig: AISourcesConfig = {
+    version: 2,
+    currentId: null,
+    sources: []
+  }
+
+  // Check for pre-release format (custom_xxx keys) - clear these
   if (raw && typeof raw === 'object') {
-    const aiSources: AISourcesConfig = { ...raw }
-    if (!aiSources.current) {
-      aiSources.current = 'custom'
+    const keys = Object.keys(raw)
+    const hasPreRelease = keys.some(k => k.startsWith('custom_'))
+    if (hasPreRelease) {
+      console.log('[Config Migration] Pre-release format detected (custom_xxx keys), resetting aiSources')
+      return newConfig
     }
-    return aiSources
   }
 
-  // First-time migration only: create aiSources from legacy api config
-  const aiSources: AISourcesConfig = { current: 'custom' }
+  // Migrate from legacy api field (no aiSources)
   const legacyApi = parsed?.api
-  const hasLegacyApi = typeof legacyApi?.apiKey === 'string' && legacyApi.apiKey.length > 0
+  const hasLegacyApiOnly = !raw && legacyApi?.apiKey
 
-  if (hasLegacyApi) {
-    const provider = legacyApi?.provider === 'openai' ? 'openai' : 'anthropic'
-    aiSources.custom = {
+  if (hasLegacyApiOnly) {
+    const provider = legacyApi.provider === 'openai' ? 'openai' : 'anthropic'
+    const builtin = getBuiltinProvider(provider)
+
+    const source: AISource = {
+      id: uuidv4(),
+      name: builtin?.name || 'Default API',
       provider,
+      authType: 'api-key',
+      apiUrl: legacyApi.apiUrl || builtin?.apiUrl || 'https://api.anthropic.com',
       apiKey: legacyApi.apiKey,
-      apiUrl: legacyApi?.apiUrl || (provider === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'),
-      model: legacyApi?.model || DEFAULT_MODEL
-    } as CustomSourceConfig
+      model: legacyApi.model || DEFAULT_MODEL,
+      availableModels: builtin?.models || [{ id: legacyApi.model || DEFAULT_MODEL, name: legacyApi.model || 'Default' }],
+      createdAt: now,
+      updatedAt: now
+    }
+
+    newConfig.sources.push(source)
+    newConfig.currentId = source.id
+    console.log('[Config Migration] Migrated legacy api field to v2 aiSources')
+    return newConfig
   }
 
-  return aiSources
+  // Migrate from v1 aiSources format
+  if (raw && typeof raw === 'object') {
+    const v1Config = raw as LegacyAISourcesConfig
+
+    // Migrate custom API source
+    if (v1Config.custom?.apiKey) {
+      const custom = v1Config.custom
+      const provider = custom.provider === 'openai' ? 'openai' : 'anthropic'
+      const builtin = getBuiltinProvider(provider)
+
+      const source: AISource = {
+        id: custom.id || uuidv4(),
+        name: custom.name || builtin?.name || 'Custom API',
+        provider,
+        authType: 'api-key',
+        apiUrl: custom.apiUrl || builtin?.apiUrl || 'https://api.anthropic.com',
+        apiKey: custom.apiKey,
+        model: custom.model || DEFAULT_MODEL,
+        availableModels: custom.availableModels?.map(id => ({ id, name: id })) ||
+          builtin?.models || [{ id: custom.model || DEFAULT_MODEL, name: custom.model || 'Default' }],
+        createdAt: now,
+        updatedAt: now
+      }
+
+      newConfig.sources.push(source)
+
+      // Set as current if v1 current was 'custom'
+      if (v1Config.current === 'custom') {
+        newConfig.currentId = source.id
+      }
+    }
+
+    // Migrate OAuth providers (any key except 'current' and 'custom')
+    // DISABLED: OAuth migration is skipped to avoid complexity and bugs
+    // Users with OAuth sources will need to re-login after upgrade
+    /*
+    for (const [key, value] of Object.entries(v1Config)) {
+      if (key === 'current' || key === 'custom' || !value || typeof value !== 'object') {
+        continue
+      }
+
+      const oauthConfig = value as OAuthSourceConfig
+
+      // Skip if not logged in or no access token
+      if (!oauthConfig.loggedIn || !oauthConfig.accessToken) {
+        continue
+      }
+
+      const builtin = getBuiltinProvider(key)
+
+      // Convert model names to ModelOption format
+      const availableModels: ModelOption[] = (oauthConfig.availableModels || []).map(id => ({
+        id,
+        name: oauthConfig.modelNames?.[id] || id
+      }))
+
+      // Ensure at least one model
+      if (availableModels.length === 0 && oauthConfig.model) {
+        availableModels.push({
+          id: oauthConfig.model,
+          name: oauthConfig.modelNames?.[oauthConfig.model] || oauthConfig.model
+        })
+      }
+
+      const source: AISource = {
+        id: uuidv4(),
+        name: builtin?.name || key,
+        provider: key,
+        authType: 'oauth',
+        apiUrl: builtin?.apiUrl || 'https://api.githubcopilot.com',
+        accessToken: oauthConfig.accessToken,
+        refreshToken: oauthConfig.refreshToken,
+        tokenExpires: oauthConfig.tokenExpires,
+        user: oauthConfig.user,
+        model: oauthConfig.model || '',
+        availableModels,
+        createdAt: now,
+        updatedAt: now
+      }
+
+      newConfig.sources.push(source)
+
+      // Set as current if v1 current matches this provider
+      if (v1Config.current === key) {
+        newConfig.currentId = source.id
+      }
+    }
+    */
+
+    // If no currentId set but we have sources, use the first one
+    if (!newConfig.currentId && newConfig.sources.length > 0) {
+      newConfig.currentId = newConfig.sources[0].id
+    }
+
+    console.log('[Config Migration] Migrated v1 aiSources to v2:', {
+      sourceCount: newConfig.sources.length,
+      currentId: newConfig.currentId
+    })
+  }
+
+  return newConfig
+}
+
+/**
+ * Normalize aiSources - handles migration from all legacy formats to v2
+ */
+function normalizeAiSources(parsed: Record<string, any>): AISourcesConfig {
+  // Migrate to v2 format (handles all legacy formats)
+  return migrateAiSourcesToV2(parsed)
 }
 
 function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
   if (!aiSources) return ''
-  const current = aiSources.current || 'custom'
 
-  // Note: model is excluded from signature because V2 Session supports dynamic model switching
-  // (via setModel method). Only changes to credentials/provider should invalidate sessions.
+  // v2 format: use currentId and sources array
+  if (aiSources.version === 2 && Array.isArray(aiSources.sources)) {
+    const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
+    if (!currentSource) return ''
+
+    // Note: model is excluded from signature because V2 Session supports dynamic model switching
+    // (via setModel method). Only changes to credentials/provider should invalidate sessions.
+    if (currentSource.authType === 'api-key') {
+      return [
+        'api-key',
+        currentSource.provider || '',
+        currentSource.apiUrl || '',
+        currentSource.apiKey || ''
+        // model excluded: dynamic switching supported
+      ].join('|')
+    }
+
+    // OAuth source
+    return [
+      'oauth',
+      currentSource.provider || '',
+      currentSource.accessToken || '',
+      currentSource.refreshToken || '',
+      currentSource.tokenExpires || ''
+      // model excluded: dynamic switching supported
+    ].join('|')
+  }
+
+  // Legacy v1 format fallback (should not happen after migration)
+  const legacy = aiSources as unknown as LegacyAISourcesConfig
+  const current = legacy.current || 'custom'
+
   if (current === 'custom') {
-    const custom = aiSources.custom
+    const custom = legacy.custom
     return [
       'custom',
       custom?.provider || '',
       custom?.apiUrl || '',
       custom?.apiKey || ''
-      // model excluded: dynamic switching supported
     ].join('|')
   }
 
-  const currentConfig = aiSources[current] as Record<string, any> | undefined
+  const currentConfig = legacy[current] as Record<string, any> | undefined
   if (currentConfig && typeof currentConfig === 'object') {
     return [
       'oauth',
@@ -403,7 +600,6 @@ function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
       currentConfig.accessToken || '',
       currentConfig.refreshToken || '',
       currentConfig.tokenExpires || ''
-      // model excluded: dynamic switching supported
     ].join('|')
   }
 

@@ -275,8 +275,12 @@ export interface OpenAIChatChunkDelta {
   content?: string
   tool_calls?: OpenAIChatToolCallDelta[]
   refusal?: string
-  // Extended fields
+  // Extended fields for reasoning/thinking
+  // - reasoning: Used by OpenAI o1/o3, some providers
+  // - reasoning_content: Used by DeepSeek R1 (both streaming and non-streaming)
+  // - thinking: Structured format with content/signature
   reasoning?: string
+  reasoning_content?: string
   thinking?: {
     content?: string
     signature?: string

@@ -2,38 +2,69 @@
 // Halo Type Definitions
 // ============================================
 
-// API Provider Configuration
-export type ApiProvider = 'anthropic' | 'openai';
+// Import values needed in this file's scope
+import {
+  DEFAULT_MODEL,
+  getCurrentModelName,
+  hasAnyAISource
+} from '../../shared/types/ai-sources';
 
-// AI Source type - which provider is being used
-export type AISourceType = 'oauth' | 'custom' | string;
+// Re-export them
+export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
-// Available Claude models
-export interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-}
+// Re-export types from shared module (v2)
+export type {
+  AISource,
+  AISourcesConfig,
+  AISourceUser,
+  AISourceType,
+  AuthType,
+  ProviderId,
+  BuiltinProviderId,
+  ModelOption,
+  ApiProvider,
+  BackendRequestConfig,
+  LoginStatus,
+  OAuthLoginState,
+  OAuthStartResult,
+  OAuthCompleteResult,
+  // Legacy types for backward compatibility
+  LegacyAISourcesConfig,
+  OAuthSourceConfig,
+  CustomSourceConfig
+} from '../../shared/types/ai-sources';
 
-export const AVAILABLE_MODELS: ModelOption[] = [
-  {
-    id: 'claude-opus-4-5-20251101',
-    name: 'Claude Opus 4.5',
-    description: 'Most powerful model, great for complex reasoning and architecture decisions'
-  },
-  {
-    id: 'claude-sonnet-4-5-20250929',
-    name: 'Claude Sonnet 4.5',
-    description: 'Balanced performance and cost, suitable for most tasks'
-  },
-  {
-    id: 'claude-haiku-4-5-20251001',
-    name: 'Claude Haiku 4.5',
-    description: 'Fast and lightweight, ideal for simple tasks'
-  }
-];
+// Re-export other values
+export {
+  AVAILABLE_MODELS,
+  createEmptyAISourcesConfig,
+  getCurrentSource,
+  getSourceById,
+  isSourceConfigured,
+  createSource,
+  addSource,
+  updateSource,
+  deleteSource,
+  setCurrentSource,
+  setCurrentModel,
+  getAvailableModels
+} from '../../shared/types/ai-sources';
 
-export const DEFAULT_MODEL = 'claude-opus-4-5-20251101';
+// Re-export provider constants
+export {
+  BUILTIN_PROVIDERS,
+  getBuiltinProvider,
+  isBuiltinProvider,
+  getRecommendedProviders,
+  getProvidersByRegion,
+  getApiKeyProviders,
+  getProviderDisplayInfo,
+  getDefaultModel,
+  isOAuthProvider,
+  isAnthropicProvider,
+  getAllProviderIds,
+  type BuiltinProvider
+} from '../../shared/constants/providers';
 
 // Permission Level
 export type PermissionLevel = 'allow' | 'ask' | 'deny';
@@ -51,6 +82,7 @@ export type MessageRole = 'user' | 'assistant' | 'system';
 // Configuration Types
 // ============================================
 
+// Legacy ApiConfig (for backward compatibility)
 export interface ApiConfig {
   provider: ApiProvider;
   apiKey: string;
@@ -81,50 +113,7 @@ export interface RemoteAccessConfig {
   port: number;
 }
 
-// ============================================
-// AI Sources Configuration (Multi-platform login)
-// ============================================
-
-// OAuth provider user info
-export interface OAuthUserInfo {
-  name: string;
-  avatar?: string;
-  uid?: string;
-}
-
-// OAuth source configuration (generic for any OAuth provider)
-export interface OAuthSourceConfig {
-  loggedIn: boolean;
-  user?: OAuthUserInfo;
-  model: string;
-  availableModels: string[];
-  modelNames?: Record<string, string>;
-  // Provider-specific token data - managed by main process
-  accessToken?: string;
-  refreshToken?: string;
-  tokenExpires?: number;
-}
-
-// Custom API source configuration (same as existing ApiConfig)
-export interface CustomSourceConfig {
-  id?: string;
-  name?: string;
-  type?: 'custom';
-  provider: ApiProvider;
-  apiKey: string;
-  apiUrl: string;
-  model: string;
-  availableModels?: string[];
-}
-
-// AI Sources - manages multiple login sources
-export interface AISourcesConfig {
-  current: AISourceType;  // Which source is currently active
-  oauth?: OAuthSourceConfig;
-  custom?: CustomSourceConfig;
-  // Dynamic provider configs (keyed by provider type)
-  [key: string]: AISourceType | OAuthSourceConfig | CustomSourceConfig | undefined;
-}
+// AI Sources types are now imported from shared module (see top of file)
 
 // ============================================
 // MCP Server Configuration Types
@@ -178,7 +167,7 @@ export interface McpServerStatus {
 
 export interface HaloConfig {
   api: ApiConfig;  // Legacy, kept for backward compatibility
-  aiSources?: AISourcesConfig;  // New multi-source configuration
+  aiSources: AISourcesConfig;  // v2 format: { version: 2, currentId, sources: [] }
   permissions: PermissionConfig;
   appearance: AppearanceConfig;
   system: SystemConfig;
@@ -540,7 +529,9 @@ export const DEFAULT_CONFIG: HaloConfig = {
     model: DEFAULT_MODEL
   },
   aiSources: {
-    current: 'custom',  // Default to custom API (no source configured yet)
+    version: 2,
+    currentId: null,
+    sources: []
   },
   permissions: {
     fileAccess: 'allow',
@@ -562,54 +553,16 @@ export const DEFAULT_CONFIG: HaloConfig = {
   isFirstLaunch: true
 };
 
-// Helper function to check if any AI source is configured
-export function hasAnyAISource(config: HaloConfig): boolean {
-  const aiSources = config.aiSources;
-  if (!aiSources) {
-    return !!config.api?.apiKey;
-  }
-  const hasCustom = !!(aiSources.custom?.apiKey);
+// Helper functions hasAnyAISource and getCurrentModelName are now imported from shared module
 
-  // Check any OAuth provider dynamically (any key with loggedIn: true except 'current' and 'custom')
-  const hasOAuth = Object.keys(aiSources).some(key => {
-    if (key === 'current' || key === 'custom') return false;
-    const source = aiSources[key as keyof typeof aiSources] as OAuthSourceConfig | undefined;
-    return source?.loggedIn === true;
-  });
-
-  return hasOAuth || hasCustom;
+// Helper function wrapper for HaloConfig (uses v2 format)
+export function hasAnyConfiguredSource(config: HaloConfig): boolean {
+  return hasAnyAISource(config.aiSources);
 }
 
-// Helper function to get current model display name
-export function getCurrentModelName(config: HaloConfig): string {
-  const aiSources = config.aiSources;
-  if (!aiSources) {
-    const legacyModel = config.api?.model;
-    const model = AVAILABLE_MODELS.find(m => m.id === legacyModel);
-    return model?.name || legacyModel || 'No model';
-  }
-
-  // Check OAuth provider first
-  if (aiSources.current === 'oauth' && aiSources.oauth) {
-    return aiSources.oauth.model || 'Default';
-  }
-
-  // Check custom API
-  if (aiSources.current === 'custom' && aiSources.custom) {
-    const model = AVAILABLE_MODELS.find(m => m.id === aiSources.custom?.model);
-    return model?.name || aiSources.custom.model;
-  }
-
-  // Check dynamic provider (from config)
-  const dynamicConfig = aiSources[aiSources.current] as OAuthSourceConfig | undefined;
-  if (dynamicConfig && typeof dynamicConfig === 'object' && 'model' in dynamicConfig) {
-    const modelId = dynamicConfig.model;
-    // Use modelNames mapping if available, otherwise fall back to model ID
-    const displayName = dynamicConfig.modelNames?.[modelId] || modelId;
-    return displayName || 'Default';
-  }
-
-  return 'No model';
+// Helper function wrapper for HaloConfig (uses v2 format)
+export function getConfigCurrentModelName(config: HaloConfig): string {
+  return getCurrentModelName(config.aiSources);
 }
 
 // Icon options for spaces (using icon IDs that map to Lucide icons)

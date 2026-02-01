@@ -1,5 +1,5 @@
 /**
- * Auth IPC Handlers
+ * Auth IPC Handlers (v2)
  *
  * Generic authentication handlers that work with any OAuth provider.
  * Provider types are configured in product.json and loaded dynamically.
@@ -7,15 +7,17 @@
  * Channels:
  * - auth:start-login (providerType) - Start OAuth login for a provider
  * - auth:complete-login (providerType, state) - Complete OAuth login
- * - auth:refresh-token (providerType) - Refresh token for a provider
- * - auth:check-token (providerType) - Check token status
- * - auth:logout (providerType) - Logout from a provider
+ * - auth:refresh-token (sourceId) - Refresh token for a source (by ID)
+ * - auth:check-token (sourceId) - Check token status (by ID)
+ * - auth:logout (sourceId) - Logout from a source (by ID)
  * - auth:get-providers - Get list of available auth providers
+ * - auth:get-builtin-providers - Get list of built-in providers
  */
 
 import { ipcMain, BrowserWindow } from 'electron'
 import { getAISourceManager, getEnabledAuthProviderConfigs } from '../services/ai-sources'
-import type { AISourceType } from '../../shared/types'
+import { BUILTIN_PROVIDERS } from '../../shared/constants'
+import type { ProviderId } from '../../shared/types'
 
 /**
  * Register all authentication IPC handlers
@@ -24,7 +26,7 @@ export function registerAuthHandlers(): void {
   const manager = getAISourceManager()
 
   /**
-   * Get list of available authentication providers
+   * Get list of available authentication providers (OAuth)
    */
   ipcMain.handle('auth:get-providers', async () => {
     try {
@@ -38,9 +40,22 @@ export function registerAuthHandlers(): void {
   })
 
   /**
+   * Get list of built-in providers (for UI display)
+   */
+  ipcMain.handle('auth:get-builtin-providers', async () => {
+    try {
+      return { success: true, data: BUILTIN_PROVIDERS }
+    } catch (error: unknown) {
+      const err = error as Error
+      console.error('[Auth IPC] Get builtin providers error:', err)
+      return { success: false, error: err.message }
+    }
+  })
+
+  /**
    * Start OAuth login flow for a provider
    */
-  ipcMain.handle('auth:start-login', async (_event, providerType: AISourceType) => {
+  ipcMain.handle('auth:start-login', async (_event, providerType: ProviderId) => {
     try {
       console.log(`[Auth IPC] Starting login for provider: ${providerType}`)
       const result = await manager.startOAuthLogin(providerType)
@@ -55,7 +70,7 @@ export function registerAuthHandlers(): void {
   /**
    * Complete OAuth login flow for a provider
    */
-  ipcMain.handle('auth:complete-login', async (_event, providerType: AISourceType, state: string) => {
+  ipcMain.handle('auth:complete-login', async (_event, providerType: ProviderId, state: string) => {
     try {
       console.log(`[Auth IPC] Completing login for provider: ${providerType}`)
       const mainWindow = BrowserWindow.getAllWindows()[0]
@@ -82,25 +97,25 @@ export function registerAuthHandlers(): void {
   })
 
   /**
-   * Refresh token for a provider
+   * Refresh token for a source (by source ID)
    */
-  ipcMain.handle('auth:refresh-token', async (_event, providerType: AISourceType) => {
+  ipcMain.handle('auth:refresh-token', async (_event, sourceId: string) => {
     try {
-      const result = await manager.ensureValidToken(providerType)
+      const result = await manager.ensureValidToken(sourceId)
       return result
     } catch (error: unknown) {
       const err = error as Error
-      console.error(`[Auth IPC] Refresh token error for ${providerType}:`, err)
+      console.error(`[Auth IPC] Refresh token error for ${sourceId}:`, err)
       return { success: false, error: err.message }
     }
   })
 
   /**
-   * Check token status for a provider
+   * Check token status for a source (by source ID)
    */
-  ipcMain.handle('auth:check-token', async (_event, providerType: AISourceType) => {
+  ipcMain.handle('auth:check-token', async (_event, sourceId: string) => {
     try {
-      const result = await manager.ensureValidToken(providerType)
+      const result = await manager.ensureValidToken(sourceId)
       if (result.success) {
         return { success: true, data: { valid: true, needsRefresh: false } }
       } else {
@@ -113,15 +128,15 @@ export function registerAuthHandlers(): void {
   })
 
   /**
-   * Logout from a provider
+   * Logout from a source (by source ID)
    */
-  ipcMain.handle('auth:logout', async (_event, providerType: AISourceType) => {
+  ipcMain.handle('auth:logout', async (_event, sourceId: string) => {
     try {
-      const result = await manager.logout(providerType)
+      const result = await manager.logout(sourceId)
       return result
     } catch (error: unknown) {
       const err = error as Error
-      console.error(`[Auth IPC] Logout error for ${providerType}:`, err)
+      console.error(`[Auth IPC] Logout error for ${sourceId}:`, err)
       return { success: false, error: err.message }
     }
   })

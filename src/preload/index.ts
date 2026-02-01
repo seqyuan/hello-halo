@@ -16,11 +16,12 @@ import type {
 export interface HaloAPI {
   // Generic Auth (provider-agnostic)
   authGetProviders: () => Promise<IpcResponse>
+  authGetBuiltinProviders: () => Promise<IpcResponse>
   authStartLogin: (providerType: string) => Promise<IpcResponse>
   authCompleteLogin: (providerType: string, state: string) => Promise<IpcResponse>
-  authRefreshToken: (providerType: string) => Promise<IpcResponse>
-  authCheckToken: (providerType: string) => Promise<IpcResponse>
-  authLogout: (providerType: string) => Promise<IpcResponse>
+  authRefreshToken: (sourceId: string) => Promise<IpcResponse>
+  authCheckToken: (sourceId: string) => Promise<IpcResponse>
+  authLogout: (sourceId: string) => Promise<IpcResponse>
   onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) => () => void
 
   // Config
@@ -313,11 +314,12 @@ function createEventListener(channel: string, callback: (data: unknown) => void)
 const api: HaloAPI = {
   // Generic Auth (provider-agnostic)
   authGetProviders: () => ipcRenderer.invoke('auth:get-providers'),
+  authGetBuiltinProviders: () => ipcRenderer.invoke('auth:get-builtin-providers'),
   authStartLogin: (providerType) => ipcRenderer.invoke('auth:start-login', providerType),
   authCompleteLogin: (providerType, state) => ipcRenderer.invoke('auth:complete-login', providerType, state),
-  authRefreshToken: (providerType) => ipcRenderer.invoke('auth:refresh-token', providerType),
-  authCheckToken: (providerType) => ipcRenderer.invoke('auth:check-token', providerType),
-  authLogout: (providerType) => ipcRenderer.invoke('auth:logout', providerType),
+  authRefreshToken: (sourceId) => ipcRenderer.invoke('auth:refresh-token', sourceId),
+  authCheckToken: (sourceId) => ipcRenderer.invoke('auth:check-token', sourceId),
+  authLogout: (sourceId) => ipcRenderer.invoke('auth:logout', sourceId),
   onAuthLoginProgress: (callback) => createEventListener('auth:login-progress', callback as (data: unknown) => void),
 
   // Config

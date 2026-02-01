@@ -20,6 +20,7 @@ import {
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { withRequestQueue, generateQueueKey } from './request-queue'
 import { runInterceptors } from '../interceptors'
+import { applyProviderAdapter } from './provider-adapters'
 
 export interface RequestHandlerOptions {
   debug?: boolean
@@ -215,9 +216,22 @@ export async function handleMessagesRequest(
       // Use potentially modified request from interceptors
       const interceptedRequest = interceptResult.request
 
+      // Build headers: start with custom headers from config
+      const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }
+
+      // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
+      const adapter = applyProviderAdapter(
+        backendUrl,
+        interceptedRequest as Record<string, unknown>,
+        requestHeaders
+      )
+      if (adapter && debug) {
+        console.log(`[RequestHandler] Applied provider adapter: ${adapter.name}`)
+      }
+
       // Make upstream request - URL is used directly, no modification
       // console.log(`[RequestHandler] Request body:\n${JSON.stringify(interceptedRequest, null, 2)}`)
-      let upstreamResp = await fetchUpstream(backendUrl, apiKey, interceptedRequest, timeoutMs, undefined, customHeaders)
+      let upstreamResp = await fetchUpstream(backendUrl, apiKey, interceptedRequest, timeoutMs, undefined, requestHeaders)
       console.log(`[RequestHandler] Upstream response: ${upstreamResp.status}`)
 
       // Handle errors - use upstream error type if available, else map from status
@@ -240,7 +254,10 @@ export async function handleMessagesRequest(
             ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }).request
             : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }).request
 
-          upstreamResp = await fetchUpstream(backendUrl, apiKey, retryRequest, timeoutMs, undefined, customHeaders)
+          // Re-apply provider adapter to retry request (reuse same headers)
+          applyProviderAdapter(backendUrl, retryRequest as Record<string, unknown>, requestHeaders)
+
+          upstreamResp = await fetchUpstream(backendUrl, apiKey, retryRequest, timeoutMs, undefined, requestHeaders)
 
           if (!upstreamResp.ok) {
             const retryErrorText = await upstreamResp.text().catch(() => '')
